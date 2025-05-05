@@ -2,6 +2,7 @@
 dist
 *-info
 *.mp4
+examples/videos/*
 
 __pycache__
 .ipynb_checkpoints
