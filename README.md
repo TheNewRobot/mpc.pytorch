@@ -19,6 +19,21 @@ and
 
 ---
 
-+ [More details are available on our project website here](http://locuslab.github.io/mpc.pytorch)
-+ This is still an early alpha release, be prepared for some rough
-  spots and get in touch if you have any questions!
+## Installation
+
+### Quick Setup with Python 3.8.10
+
+```bash
+# Create and activate virtual environment
+python3.8 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install the package
+pip install --upgrade pip
+pip install mpc
+```
+
+If you want to need to un the examples in the simulator, you might need to install the specific legacy gym version
+```bash
+pip install gym==0.20.0 pyglet==1.2.4
+```

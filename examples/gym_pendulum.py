@@ -1,6 +1,8 @@
 import logging
 import math
 import time
+import os
+import argparse
 
 import gym
 import numpy as np
@@ -8,6 +10,19 @@ import torch
 import torch.autograd
 from gym import wrappers, logger as gym_log
 from mpc import mpc
+\
+
+# Set up argument parser
+parser = argparse.ArgumentParser(description='MPC Pendulum')
+parser.add_argument('--record', action='store_true', help='Enable video recording')
+parser.add_argument('--video_dir', type=str, default='videos/', help='Directory to store videos')
+parser.add_argument('--render', action='store_true', help='Enable rendering')
+args = parser.parse_args()
+
+# Create video directory if it doesn't exist
+if args.record:
+    os.makedirs(args.video_dir, exist_ok=True)
+    print(f"Videos will be saved to: {args.video_dir}")
 
 gym_log.set_level(gym_log.INFO)
 logger = logging.getLogger(__name__)
@@ -55,16 +70,30 @@ if __name__ == "__main__":
     if downward_start:
         env.state = [np.pi, 1]
 
-    env = wrappers.Monitor(env, '/tmp/box_ddp_pendulum/', force=True)
-    env.reset()
-    if downward_start:
-        env.env.state = [np.pi, 1]
+    # Only add the Monitor wrapper if recording is enabled
+    if args.record:
+        try:
+            env = wrappers.Monitor(env, args.video_dir, force=True, video_callable=lambda episode_id: True)
+            env.reset()
+            if downward_start:
+                env.env.state = [np.pi, 1]
+        except Exception as e:
+            logger.error(f"Error setting up video recording: {e}")
+            logger.warning("Continuing without video recording")
+            # Ensure environment is reset even if monitor fails
+            env.reset()
+            if downward_start:
+                env.state = [np.pi, 1]
+    else:
+        env.reset()
+        if downward_start:
+            env.state = [np.pi, 1]
 
     nx = 2
     nu = 1
 
     u_init = None
-    render = True
+    render = args.render
     retrain_after_iter = 50
     run_iter = 500
 
@@ -107,3 +136,6 @@ if __name__ == "__main__":
             env.render()
 
     logger.info("Total reward %f", total_reward)
+    
+    # Close the environment properly
+    env.close()
