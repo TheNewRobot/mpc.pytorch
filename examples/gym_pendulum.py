@@ -69,28 +69,63 @@ if __name__ == "__main__":
     ACTION_LOW = -2.0
     ACTION_HIGH = 2.0
 
-    class PendulumDynamics(torch.nn.Module):
-        def forward(self, state, action):
-            th = state[:, 0].view(-1, 1)
-            thdot = state[:, 1].view(-1, 1)
-
-            g = 10
-            m = 1
-            l = 1
-            dt = 0.05
-
-            u = action
-            u = torch.clamp(u, -2, 2)
-
-            newthdot = thdot + (-3 * g / (2 * l) * torch.sin(th + np.pi) + 3. / (m * l ** 2) * u) * dt
-            newth = th + newthdot * dt
-            newthdot = torch.clamp(newthdot, -8, 8)
-
-            state = torch.cat((angle_normalize(newth), newthdot), dim=1)
-            return state
-
     def angle_normalize(x):
         return (((x + math.pi) % (2 * math.pi)) - math.pi)
+    
+    class PendulumDynamics(torch.nn.Module):
+        def __init__(self, g=9.81, m=1, l=1, dt=0.05, u_min=-2, u_max=2, thdot_min=-8, thdot_max=8):
+            """
+            Initialize the pendulum dynamics model with physics parameters.
+            
+            Args:
+                g (float): gravity
+                m (float): Mass of the pendulum 
+                l (float): Length of the pendulum
+                dt (float): Time step duration of the simulation
+                u_min (float): Minimum input
+                u_max (float): Maximum input
+                thdot_min (float): Min angular velocity
+                thdot_max (float): Max angular velocity
+            """
+            super(PendulumDynamics, self).__init__()
+            self.g = g
+            self.m = m
+            self.l = l
+            self.dt = dt
+            self.u_min = u_min
+            self.u_max = u_max
+            self.thdot_min = thdot_min
+            self.thdot_max = thdot_max
+            
+        def forward(self, state, action):
+            """
+            Compute the next state given the current state and action.
+            
+            Args:
+                state: Current state [theta, theta_dot]
+                action: Control input
+                
+            Returns:
+                Next state after applying dynamics
+            """
+            th = state[:, 0].view(-1, 1)
+            thdot = state[:, 1].view(-1, 1)
+            
+            # Apply control constraints
+            u = torch.clamp(action, self.u_min, self.u_max)
+            
+            # Physics equations
+            newthdot = thdot + (-3 * self.g / (2 * self.l) * torch.sin(th + np.pi) + 
+                            3. / (self.m * self.l ** 2) * u) * self.dt
+            newth = th + newthdot * self.dt
+            
+            # Apply state constraints
+            newthdot = torch.clamp(newthdot, self.thdot_min, self.thdot_max)
+            
+            # Return normalized angle and angular velocity
+            state = torch.cat((angle_normalize(newth), newthdot), dim=1)
+            return state
+   
 
     # Choose render_mode based on args
     if args.render:
@@ -171,13 +206,14 @@ if __name__ == "__main__":
         angle = np.arctan2(observation[1], observation[0])  # If observation is [cos(θ), sin(θ), θ̇]
         
         # Update monitor with current variables
-        monitor.update(
-            theta=state[0],                  # Current angle (in radians)
-            theta_dot=state[1],              # Angular velocity
-            control=action.item(),           # Control input
-            reward=reward,                   # Instantaneous reward
-            cu_reward=total_reward,          # Cumulative rewar
-        )
+        if args.plot:
+            monitor.update(
+                theta=state[0],                  # Current angle (in radians)
+                theta_dot=state[1],              # Angular velocity
+                control=action.item(),           # Control input
+                reward=reward,                   # Instantaneous reward
+                cu_reward=total_reward,          # Cumulative rewar
+            )
         
         logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", action, -reward, elapsed)
         
