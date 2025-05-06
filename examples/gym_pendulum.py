@@ -1,3 +1,29 @@
+"""
+MPC Pendulum Controller with Known Dynamics
+===========================================
+
+This script implements Model Predictive Control (MPC) for the pendulum swing-up
+problem using an explicitly defined dynamics model based on physics equations.
+
+Purpose:
+- Demonstrate MPC control of a pendulum using known system dynamics
+- Swing up a pendulum from downward position to upright balanced position
+- Optimize control actions over a prediction horizon to minimize costs
+
+Features:
+- Physics-based pendulum dynamics model
+- Configurable rendering via command-line argument
+- Quadratic cost function penalizing deviation from goal and control effort
+- Model predictive control with auto-differentiation gradient method
+
+Usage:
+    python pendulum_mpc.py [--render]
+
+Arguments:
+    --render    Enable visual rendering of the pendulum
+
+"""
+
 import logging
 import math
 import time
@@ -123,9 +149,12 @@ if __name__ == "__main__":
         
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
-        
         total_reward += reward
         logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", action, -reward, elapsed)
+        
+        if done:
+            print("Environment has reached it's end state!")
+            break
 
     logger.info("Total reward %f", total_reward)
     
