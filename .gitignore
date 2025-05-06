@@ -2,7 +2,7 @@
 dist
 *-info
 *.mp4
-examples/videos/*
+examples/pendulum_mpc_plots/*
 
 __pycache__
 .ipynb_checkpoints
