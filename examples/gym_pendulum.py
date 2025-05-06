@@ -1,26 +1,30 @@
 """
-MPC Pendulum Controller with Known Dynamics
-===========================================
+MPC Pendulum Controller with Known Dynamics and Monitoring
+=========================================================
 
 This script implements Model Predictive Control (MPC) for the pendulum swing-up
 problem using an explicitly defined dynamics model based on physics equations.
+Includes a monitoring system for plotting state variables and control inputs.
 
 Purpose:
 - Demonstrate MPC control of a pendulum using known system dynamics
 - Swing up a pendulum from downward position to upright balanced position
 - Optimize control actions over a prediction horizon to minimize costs
+- Monitor and plot key variables during simulation
 
 Features:
 - Physics-based pendulum dynamics model
 - Configurable rendering via command-line argument
+- Real-time plotting of state variables, control inputs, and rewards
 - Quadratic cost function penalizing deviation from goal and control effort
 - Model predictive control with auto-differentiation gradient method
 
 Usage:
-    python pendulum_mpc.py [--render]
+    python pendulum_mpc_with_monitor.py [--render] [--plot]
 
 Arguments:
     --render    Enable visual rendering of the pendulum
+    --plot      Enable real-time plotting of variables
 
 """
 
@@ -39,9 +43,13 @@ import numpy as np
 import torch
 from mpc import mpc
 
+# Import our monitoring module
+from monitor import Monitor
+
 # Set up argument parser
-parser = argparse.ArgumentParser(description='MPC Pendulum')
+parser = argparse.ArgumentParser(description='MPC Pendulum with Monitoring')
 parser.add_argument('--render', action='store_true', help='Enable rendering')
+parser.add_argument('--plot', action='store_true', help='Enable real-time plotting')
 args = parser.parse_args()
 
 # Use standard Python logging
@@ -88,10 +96,13 @@ if __name__ == "__main__":
         render_mode = None         # No rendering
     
     # Environment kwargs
-    env_kwargs = {"g": 10.0}
+    env_kwargs = {"g": 9.81}
     
     # Create base environment
     env = gym.make(ENV_NAME, render_mode=render_mode, disable_env_checker=True, **env_kwargs)
+    
+    # Initialize monitoring system
+    monitor = Monitor(enabled=args.plot, update_freq=5)
     
     # Initialize environment state
     downward_start = True
@@ -123,10 +134,11 @@ if __name__ == "__main__":
     cost = mpc.QuadCost(Q, p)
 
     total_reward = 0
+    computation_times = []
 
     for i in range(run_iter):
         state = env.unwrapped.state
-        state = torch.tensor(state, dtype=torch.float32).view(1, -1)
+        state_tensor = torch.tensor(state, dtype=torch.float32).view(1, -1)
         
         # Only render if render mode is set
         if render_mode == "human":
@@ -138,11 +150,12 @@ if __name__ == "__main__":
                        n_batch=N_BATCH, backprop=False, verbose=0, u_init=u_init,
                        grad_method=mpc.GradMethods.AUTO_DIFF)
 
-        nominal_states, nominal_actions, nominal_objs = ctrl(state, cost, PendulumDynamics())
+        nominal_states, nominal_actions, nominal_objs = ctrl(state_tensor, cost, PendulumDynamics())
         action = nominal_actions[0]
         u_init = torch.cat((nominal_actions[1:], torch.zeros(1, N_BATCH, nu)), dim=0)
 
         elapsed = time.perf_counter() - command_start
+        computation_times.append(elapsed)
         
         observation, reward, terminated, truncated, info = env.step(action.detach().numpy())
         done = terminated or truncated
@@ -150,13 +163,34 @@ if __name__ == "__main__":
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
         total_reward += reward
+        
+        # Calculate angle from cos/sin components if needed
+        angle = np.arctan2(observation[1], observation[0])  # If observation is [cos(θ), sin(θ), θ̇]
+        
+        # Update monitor with current variables
+        monitor.update(
+            theta=state[0],           # Current angle (in radians)
+            theta_dot=state[1],       # Angular velocity
+            control=action.item(),    # Control input
+            reward=reward,            # Instantaneous reward
+            cumulative_reward=total_reward,  # Cumulative reward
+            computation_time=elapsed  # MPC computation time
+        )
+        
         logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", action, -reward, elapsed)
         
         if done:
-            print("Environment has reached it's end state!")
+            print("Environment has reached its end state!")
             break
 
     logger.info("Total reward %f", total_reward)
+    logger.info("Average computation time: %f seconds", np.mean(computation_times))
     
-    # Close the environment properly
+    # Save plots if monitoring was enabled
+    if args.plot:
+        monitor.save_plots(directory="pendulum_mpc_plots", filename_prefix="pendulum_run")
+        print(f"Plots saved to 'pendulum_mpc_plots' directory")
+    
+    # Close the monitor and environment properly
+    monitor.close()
     env.close()

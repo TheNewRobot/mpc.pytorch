@@ -35,5 +35,5 @@ pip install mpc
 
 If you want to need to un the examples in the simulator, you might need to install the specific legacy gym version
 ```bash
-pip install gymnasium==1.1.1 "gymnasium[classic_control]"
+pip install gymnasium==1.1.1 "gymnasium[classic_control]" matplotlib
 ```
