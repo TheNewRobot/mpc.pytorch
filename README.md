@@ -35,5 +35,5 @@ pip install mpc
 
 If you want to need to un the examples in the simulator, you might need to install the specific legacy gym version
 ```bash
-pip install gym==0.20.0 pyglet==1.2.4
+pip install gymnasium==1.1.1 
 ```
