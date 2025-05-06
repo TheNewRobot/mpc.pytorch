@@ -1,7 +1,6 @@
 import logging
 import math
 import time
-import os
 import argparse
 import warnings
 
@@ -13,41 +12,17 @@ import gymnasium as gym
 import numpy as np
 import torch
 from mpc import mpc
-import cv2
 
 # Set up argument parser
 parser = argparse.ArgumentParser(description='MPC Pendulum')
-parser.add_argument('--record', action='store_true', help='Enable video recording')
-parser.add_argument('--video_dir', type=str, default='videos/', help='Directory to store videos')
 parser.add_argument('--render', action='store_true', help='Enable rendering')
 args = parser.parse_args()
-
-# Create video directory if it doesn't exist
-if args.record:
-    os.makedirs(args.video_dir, exist_ok=True)
-    print(f"Videos will be saved to: {args.video_dir}")
 
 # Use standard Python logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S')
-
-def create_video(frames, fps=30, output_path='output.mp4'):
-    """Save frames to an MP4 video file using OpenCV"""
-    if not frames:
-        logger.warning("No frames to save")
-        return
-        
-    height, width, _ = frames[0].shape
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    
-    for frame in frames:
-        # Convert RGB to BGR which OpenCV expects
-        out.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    out.release()
-    logger.info(f"Successfully saved video to {output_path}")
 
 if __name__ == "__main__":
     ENV_NAME = "Pendulum-v1"
@@ -80,8 +55,11 @@ if __name__ == "__main__":
     def angle_normalize(x):
         return (((x + math.pi) % (2 * math.pi)) - math.pi)
 
-    # Create the environment with render_mode
-    render_mode = "human" 
+    # Choose render_mode based on args
+    if args.render:
+        render_mode = "human"      # Display on screen
+    else:
+        render_mode = None         # No rendering
     
     # Environment kwargs
     env_kwargs = {"g": 10.0}
@@ -101,7 +79,6 @@ if __name__ == "__main__":
     nu = 1
 
     u_init = None
-    render = args.render
     retrain_after_iter = 50
     run_iter = 500
 
@@ -119,21 +96,15 @@ if __name__ == "__main__":
     p = p.repeat(TIMESTEPS, N_BATCH, 1)
     cost = mpc.QuadCost(Q, p)
 
-    # Initialize list to store frames if recording
-    frames = []
     total_reward = 0
 
     for i in range(run_iter):
         state = env.unwrapped.state
         state = torch.tensor(state, dtype=torch.float32).view(1, -1)
         
-        # Capture frame if recording
-        if args.record and render_mode == "rgb_array":
-            try:
-                frame = env.render()
-                frames.append(frame)
-            except Exception as e:
-                logger.error(f"Error capturing frame: {e}")
+        # Only render if render mode is set
+        if render_mode == "human":
+            env.render()
 
         command_start = time.perf_counter()
         ctrl = mpc.MPC(nx, nu, TIMESTEPS, u_lower=ACTION_LOW, u_upper=ACTION_HIGH, lqr_iter=LQR_ITER,
@@ -157,15 +128,6 @@ if __name__ == "__main__":
         logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", action, -reward, elapsed)
 
     logger.info("Total reward %f", total_reward)
-    
-    # Save video if recording was enabled and we captured frames
-    if args.record and frames:
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        output_path = os.path.join(args.video_dir, f"pendulum_{timestamp}.mp4")
-        try:
-            create_video(frames, fps=30, output_path=output_path)
-        except Exception as e:
-            logger.error(f"Failed to save video: {e}")
     
     # Close the environment properly
     env.close()
