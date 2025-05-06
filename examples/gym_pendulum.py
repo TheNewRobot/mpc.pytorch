@@ -35,6 +35,9 @@ import argparse
 import warnings
 
 # Suppress specific warnings
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+logging.getLogger('PIL').setLevel(logging.WARNING)
+logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
 warnings.filterwarnings("ignore", message=".*The reward returned by.*")
 warnings.filterwarnings("ignore", message=".*The obs returned by the.*")
 
@@ -169,12 +172,11 @@ if __name__ == "__main__":
         
         # Update monitor with current variables
         monitor.update(
-            theta=state[0],           # Current angle (in radians)
-            theta_dot=state[1],       # Angular velocity
-            control=action.item(),    # Control input
-            reward=reward,            # Instantaneous reward
-            cumulative_reward=total_reward,  # Cumulative reward
-            computation_time=elapsed  # MPC computation time
+            theta=state[0],                  # Current angle (in radians)
+            theta_dot=state[1],              # Angular velocity
+            control=action.item(),           # Control input
+            reward=reward,                   # Instantaneous reward
+            cu_reward=total_reward,          # Cumulative rewar
         )
         
         logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", action, -reward, elapsed)
