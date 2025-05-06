@@ -21,7 +21,7 @@ and
 
 ## Installation
 
-### Quick Setup with Python 3.8.10
+### Quick Setup with Python 3.8.10 or greater
 
 ```bash
 # Create and activate virtual environment
