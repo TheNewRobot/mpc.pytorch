@@ -33,6 +33,17 @@ from collections import defaultdict
 import threading
 from typing import Dict, List, Optional, Union, Any
 
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "font.serif": ["Computer Modern Roman"],
+    "axes.labelsize": 12,
+    "font.size": 11,
+    "legend.fontsize": 10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "axes.xmargin": 0,
+})
 
 class Monitor:
     """Monitor class for tracking and plotting variables during simulations."""
