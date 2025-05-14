@@ -42,7 +42,7 @@ def angle_normalize(x):
 if __name__ == "__main__":
     # Constants - predefined for efficiency
     ENV_NAME = "Pendulum-v1"
-    TIMESTEPS = 10 # This was initially 10
+    TIMESTEPS = 10
     N_BATCH = 1
     LQR_ITER = 50
     ACTION_LOW = -4.0
@@ -58,9 +58,9 @@ if __name__ == "__main__":
     MAX_THDOT = 8  # max angular velocity
     
     # Neural network hyperparameters
-    H_UNITS = 32 # This was initially 16
+    H_UNITS = 64  # Increased for better expressivity
     TRAIN_EPOCH = 200
-    BOOT_STRAP_ITER = 300 # Exploration During Bootstrapping
+    BOOT_STRAP_ITER = 300
     CTRL_PENALTY = 0.5
     LEARNING_RATE = 0.001
     
@@ -68,17 +68,18 @@ if __name__ == "__main__":
     nx = 2  # state dimension
     nu = 1  # action dimension
 
-    # Initialize neural network for dynamics approximation
-    # Create a more efficient network architecture with proper initialization
+    # Initialize neural network for dynamics approximation with a deeper architecture
     network = torch.nn.Sequential(
         torch.nn.Linear(nx + nu, H_UNITS),
         torch.nn.ReLU(),
         torch.nn.Linear(H_UNITS, H_UNITS),
         torch.nn.ReLU(),
+        torch.nn.Linear(H_UNITS, H_UNITS),  # Added another layer
+        torch.nn.ReLU(),
         torch.nn.Linear(H_UNITS, nx)
     ).double()
     
-    # Initialize weights with a better method for faster convergence
+    # Initialize weights for faster convergence
     for m in network.modules():
         if isinstance(m, torch.nn.Linear):
             torch.nn.init.xavier_normal_(m.weight)
@@ -109,7 +110,7 @@ if __name__ == "__main__":
             next_state[:, 0] = angle_normalize(next_state[:, 0])
             return next_state
 
-    # True dynamics model for comparison
+    # True dynamics model for comparison and validation
     def true_dynamics(state, action):
         th = state[:, 0].view(-1, 1)
         thdot = state[:, 1].view(-1, 1)
@@ -129,7 +130,7 @@ if __name__ == "__main__":
     
     # Create validation set for model evaluation
     Nv = 1000
-    # Use a more efficient approach for validation set generation
+    # More efficient validation set generation
     statev = torch.zeros((Nv, 2), dtype=DTYPE)
     statev[:, 0] = (torch.rand(Nv, dtype=DTYPE) - 0.5) * 2 * math.pi
     statev[:, 1] = (torch.rand(Nv, dtype=DTYPE) - 0.5) * 16
@@ -138,13 +139,10 @@ if __name__ == "__main__":
     # Angle difference calculation (optimized with vectorization)
     def angular_diff_batch(a, b):
         d = a - b
-        mask_high = d > math.pi
-        mask_low = d < -math.pi
-        d[mask_high] -= 2 * math.pi
-        d[mask_low] += 2 * math.pi
+        d = torch.remainder(d + math.pi, 2 * math.pi) - math.pi
         return d
 
-    # Optimized training function
+    # Optimized training function with proper dataset management
     def train(new_data):
         global dataset
         
@@ -153,16 +151,21 @@ if __name__ == "__main__":
         
         # Convert to tensor if needed
         if not torch.is_tensor(new_data):
-            new_data = torch.from_numpy(new_data)
+            new_data = torch.from_numpy(new_data).to(dtype=DTYPE)
             
         # Clamp actions to valid range
         new_data[:, -1] = torch.clamp(new_data[:, -1], ACTION_LOW, ACTION_HIGH)
         
-        # Append data efficiently
+        # Append data efficiently - grow dataset over time
         if dataset is None:
             dataset = new_data.clone()
         else:
             dataset = torch.cat((dataset, new_data), dim=0)
+            
+            # Limit dataset size to prevent memory issues
+            if dataset.shape[0] > 5000:
+                # Keep most recent data points
+                dataset = dataset[-5000:]
 
         # Prepare training data
         XU = dataset.detach()
@@ -177,7 +180,7 @@ if __name__ == "__main__":
         for param in network.parameters():
             param.requires_grad = True
 
-        # Use more efficient optimization with learning rate schedule
+        # Use efficient optimization with proper learning rate schedule
         optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE)
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
         
@@ -190,9 +193,20 @@ if __name__ == "__main__":
         for epoch in range(TRAIN_EPOCH):
             optimizer.zero_grad()
             
-            # Compute predictions and loss
-            Yhat = network(XU)
-            loss = torch.mean((Y - Yhat).norm(2, dim=1) ** 2)
+            # Mini-batch training for larger datasets
+            if XU.shape[0] > 1000:
+                # Simple mini-batch implementation
+                batch_size = 1000
+                idx = torch.randperm(XU.shape[0])[:batch_size]
+                X_batch = XU[idx]
+                Y_batch = Y[idx]
+                
+                Yhat = network(X_batch)
+                loss = torch.mean((Y_batch - Yhat).norm(2, dim=1) ** 2)
+            else:
+                # Use full batch for smaller datasets
+                Yhat = network(XU)
+                loss = torch.mean((Y - Yhat).norm(2, dim=1) ** 2)
             
             # Backpropagation
             loss.backward()
@@ -202,9 +216,9 @@ if __name__ == "__main__":
             if epoch % 10 == 0:
                 logger.debug("ds %d epoch %d loss %f", dataset.shape[0], epoch, loss.item())
             
-            # Learning rate adjustment
-            # if epoch % 20 == 0:
-                #scheduler.step()
+            # Learning rate adjustment - uncommented
+            if epoch % 20 == 0:
+                scheduler.step()
                 
             # Early stopping check
             if abs(prev_loss - loss.item()) < 1e-4:
@@ -240,9 +254,9 @@ if __name__ == "__main__":
     render_mode = "human" if args.render else None
     env_kwargs = {"g": G}
     
-    # Create environment and monitor
+    # Create environment and monitor - use proper update frequency
     env = gym.make(ENV_NAME, render_mode=render_mode, disable_env_checker=True, **env_kwargs)
-    monitor = Monitor(enabled=args.plot, update_freq=10)  # Less frequent updates for efficiency
+    monitor = Monitor(enabled=args.plot, update_freq=1)  # Increased frequency for real-time plotting
     
     # Initialize environment
     observation, info = env.reset()
@@ -302,7 +316,7 @@ if __name__ == "__main__":
     
     for i in range(run_iter):
         # Get and prepare state
-        state = env.unwrapped.state.copy()
+        state = env.unwrapped.state.flatten().copy()
         state_tensor = torch.tensor(state, dtype=DTYPE).view(1, -1)
         
         # Render if enabled
@@ -335,8 +349,9 @@ if __name__ == "__main__":
         total_reward += reward
         
         # Log less frequently
-        if i % 10 == 0:
-            print(f"Iteration {i}, Current angle: {angle_normalize(state[0])}, Distance to upright: {angle_normalize(abs(state[0]))}")
+        if i % 5 == 0:
+            print(f"Iteration {i}, Current angle: {angle_normalize(state[0]):.2f}")
+            print(f"Distance to upright: {abs(angle_normalize(state[0])):.2f}")
             logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", 
                        action.item(), -reward, elapsed)
 
@@ -350,18 +365,27 @@ if __name__ == "__main__":
         collected_dataset[di, :nx] = state_tensor
         collected_dataset[di, nx:] = action
         
-        # Update monitoring (less frequently)
-        if args.plot and i % 5 == 0:
-            print("Updating the plot")
+        # Update monitoring - corrected parameter names and increased frequency
+        if args.plot and i % 5 == 0:  # Remove the i % 5 condition to update every iteration
             monitor.update(
                 theta=state[0],
                 theta_dot=state[1],
                 control=action.item(),
                 reward=reward,
-                cumulative_reward=total_reward,
+                cu_reward=total_reward,  # Changed from cumulative_reward to cu_reward to match Monitor class
                 model_error=torch.tensor(computation_times).mean().item()
             )
         
+        # Break if problem is solved (pendulum is upright and stable)
+        if abs(angle_normalize(state[0])) < 0.1 and abs(state[1]) < 0.5:
+            success_counter = getattr(env, 'success_counter', 0) + 1
+            setattr(env, 'success_counter', success_counter)
+            
+            if success_counter > 50:  # Stable for 50 steps
+                print("Success! Pendulum balanced.")
+                break
+        else:
+            setattr(env, 'success_counter', 0)
 
     # Print summary
     logger.info("Total reward: %f", total_reward)
