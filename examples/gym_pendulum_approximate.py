@@ -42,12 +42,12 @@ def angle_normalize(x):
 if __name__ == "__main__":
     # Constants - predefined for efficiency
     ENV_NAME = "Pendulum-v1"
-    TIMESTEPS = 10
+    TIMESTEPS = 20
     N_BATCH = 1
-    LQR_ITER = 50
+    LQR_ITER = 100
     ACTION_LOW = -4.0
     ACTION_HIGH = 4.0
-    DEVICE = "cpu"
+    DEVICE = "cpu" #TODO not being used currently
     DTYPE = torch.double
     
     # System constants
@@ -56,13 +56,19 @@ if __name__ == "__main__":
     L = 1.0
     DT = 0.05
     MAX_THDOT = 8  # max angular velocity
+    GOAL_STATE = torch.tensor((0., 0.), dtype=DTYPE)
+    GOAL_WEIGHTS = torch.tensor((10., 1.0), dtype=DTYPE)
     
     # Neural network hyperparameters
     H_UNITS = 64  # Increased for better expressivity
     TRAIN_EPOCH = 200
     BOOT_STRAP_ITER = 300
-    CTRL_PENALTY = 0.5
+    CTRL_PENALTY = 0.1
     LEARNING_RATE = 0.001
+
+    # Training
+    RETRAIN_AFTER_ITER = 100
+    RUN_ITER = 1000
     
     # System dimensions
     nx = 2  # state dimension
@@ -127,7 +133,8 @@ if __name__ == "__main__":
     # Initialize dataset and dynamics
     dataset = None
     dynamics = PendulumDynamics()
-    
+    current_model_error = 0.0
+
     # Create validation set for model evaluation
     Nv = 1000
     # More efficient validation set generation
@@ -145,7 +152,8 @@ if __name__ == "__main__":
     # Optimized training function with proper dataset management
     def train(new_data):
         global dataset
-        
+        global current_model_error
+
         # Normalize angles
         new_data[:, 0] = angle_normalize(new_data[:, 0])
         
@@ -243,14 +251,12 @@ if __name__ == "__main__":
             dtheta = angular_diff_batch(yp[:, 0], yt[:, 0])
             dtheta_dt = yp[:, 1] - yt[:, 1]
             E = torch.cat((dtheta.view(-1, 1), dtheta_dt.view(-1, 1)), dim=1).norm(dim=1)
-            
+            current_model_error = E.mean().item()
             logger.info("Error with true dynamics theta %f theta_dt %f norm %f", 
-                      dtheta.abs().mean(), dtheta_dt.abs().mean(), E.mean())
+                    dtheta.abs().mean(), dtheta_dt.abs().mean(), E.mean())
 
     # MPC and environment setup
     u_init = None
-    retrain_after_iter = 100
-    run_iter = 1000
     render_mode = "human" if args.render else None
     env_kwargs = {"g": G}
     
@@ -261,9 +267,6 @@ if __name__ == "__main__":
     # Initialize environment
     observation, info = env.reset()
     env.unwrapped.state = np.array([np.pi, 1], dtype=np.float32)
-
-    goal_state = torch.tensor((0., 0.), dtype=DTYPE)
-    goal_weights = torch.tensor((3., 0.5), dtype=DTYPE)
 
     observation = env.unwrapped._get_obs()
 
@@ -289,8 +292,8 @@ if __name__ == "__main__":
     env.unwrapped.state = np.array([np.pi, 1], dtype=np.float32)
     observation = env.unwrapped._get_obs()
     
-    q = torch.cat((goal_weights, CTRL_PENALTY * torch.ones(nu, dtype=DTYPE)))
-    px = -torch.sqrt(goal_weights) * goal_state
+    q = torch.cat((GOAL_WEIGHTS, CTRL_PENALTY * torch.ones(nu, dtype=DTYPE)))
+    px = -torch.sqrt(GOAL_WEIGHTS) * GOAL_STATE
     p = torch.cat((px, torch.zeros(nu, dtype=DTYPE)))
     Q = torch.diag(q).repeat(TIMESTEPS, N_BATCH, 1, 1)
     p = p.repeat(TIMESTEPS, N_BATCH, 1)
@@ -309,12 +312,12 @@ if __name__ == "__main__":
                             grad_method=mpc.GradMethods.AUTO_DIFF)
 
     # Run MPC with data collection
-    collected_dataset = torch.zeros((retrain_after_iter, nx + nu), dtype=DTYPE)
+    collected_dataset = torch.zeros((RETRAIN_AFTER_ITER, nx + nu), dtype=DTYPE)
     u_zeros = torch.zeros(1, N_BATCH, nu, dtype=DTYPE)  # Preallocate
     total_reward = 0
     computation_times = []
     
-    for i in range(run_iter):
+    for i in range(RUN_ITER):
         # Get and prepare state
         state = env.unwrapped.state.flatten().copy()
         state_tensor = torch.tensor(state, dtype=DTYPE).view(1, -1)
@@ -351,12 +354,11 @@ if __name__ == "__main__":
         # Log less frequently
         if i % 5 == 0:
             print(f"Iteration {i}, Current angle: {angle_normalize(state[0]):.2f}")
-            print(f"Distance to upright: {abs(angle_normalize(state[0])):.2f}")
             logger.debug("action taken: %.4f cost received: %.4f time taken: %.5fs", 
                        action.item(), -reward, elapsed)
 
         # Store data for retraining
-        di = i % retrain_after_iter
+        di = i % RETRAIN_AFTER_ITER
         if di == 0 and i > 0:
             # Retrain the model periodically
             train(collected_dataset)
@@ -368,12 +370,11 @@ if __name__ == "__main__":
         # Update monitoring - corrected parameter names and increased frequency
         if args.plot and i % 5 == 0:  # Remove the i % 5 condition to update every iteration
             monitor.update(
-                theta=state[0],
+                theta=angle_normalize(state[0]),
                 theta_dot=state[1],
                 control=action.item(),
                 reward=reward,
-                cu_reward=total_reward,  # Changed from cumulative_reward to cu_reward to match Monitor class
-                model_error=torch.tensor(computation_times).mean().item()
+                model_error=current_model_error
             )
         
         # Break if problem is solved (pendulum is upright and stable)
