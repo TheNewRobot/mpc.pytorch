@@ -12,6 +12,9 @@ import math
 import time
 import argparse
 import warnings
+import os
+import json
+from datetime import datetime
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", message=".*The reward returned by.*")
@@ -27,6 +30,8 @@ from monitor import Monitor  # Import the monitoring module
 parser = argparse.ArgumentParser(description='MPC Pendulum with Approximated Dynamics')
 parser.add_argument('--render', action='store_true', help='Enable rendering')
 parser.add_argument('--plot', action='store_true', help='Enable real-time plotting')
+parser.add_argument('--save-model', action='store_true', help='Save model weights after training')
+parser.add_argument('--base-dir', type=str, default='model_weights', help='Base directory for saving model weights')
 args = parser.parse_args()
 
 # Configure logging - reduce verbosity for better performance
@@ -35,9 +40,97 @@ logging.basicConfig(level=logging.INFO,
                     format='[%(levelname)s %(asctime)s %(pathname)s:%(lineno)d] %(message)s',
                     datefmt='%m-%d %H:%M:%S')
 
+# Create a unique run directory based on timestamp when the script starts
+if args.save_model:
+    RUN_TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+    RUN_DIR = os.path.join(args.base_dir, RUN_TIMESTAMP)
+    os.makedirs(RUN_DIR, exist_ok=True)
+    print(f"Model weights for this run will be saved to: {RUN_DIR}")
+else:
+    RUN_DIR = None
+
 # Pre-define angle normalization function
 def angle_normalize(x):
     return (((x + math.pi) % (2 * math.pi)) - math.pi)
+
+def save_model_weights(model, params):
+    """
+    Save model weights and training parameters.
+    Overwrites existing files within the run directory.
+    
+    Args:
+        model: PyTorch model to save
+        params: Dictionary of hyperparameters and training info
+    """
+    if not args.save_model or RUN_DIR is None:
+        return
+    
+    # Save model weights
+    model_path = os.path.join(RUN_DIR, "network_weights.pt")
+    torch.save(model.state_dict(), model_path)
+    
+    # Add last update timestamp to params
+    params["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Save parameters as JSON
+    params_path = os.path.join(RUN_DIR, "training_params.json")
+    with open(params_path, 'w') as f:
+        json.dump(params, f, indent=4)
+    
+    print(f"Model saved to {RUN_DIR}")
+
+def load_model_weights(run_dir, model=None, nx=2, nu=1):
+    """
+    Load model weights and parameters from a specified run directory.
+    
+    Args:
+        run_dir: Run directory containing saved model
+        model: Optional model to load weights into (will create new if None)
+        nx: State dimension (needed if model is None)
+        nu: Action dimension (needed if model is None)
+    
+    Returns:
+        model: Loaded model
+        params: Dictionary of saved parameters
+    """
+    # Check if directory exists
+    if not os.path.exists(run_dir):
+        print(f"Model directory {run_dir} not found")
+        return None, None
+    
+    # Load parameters
+    params_path = os.path.join(run_dir, "training_params.json")
+    if not os.path.exists(params_path):
+        print(f"Parameters file not found at {params_path}")
+        return None, None
+        
+    with open(params_path, 'r') as f:
+        params = json.load(f)
+    
+    # Load model weights
+    weights_path = os.path.join(run_dir, "network_weights.pt")
+    if not os.path.exists(weights_path):
+        print(f"Weights file not found at {weights_path}")
+        return None, None
+    
+    # Create model if not provided
+    if model is None:
+        h_units = params["hyperparameters"]["hidden_units"]
+        model = torch.nn.Sequential(
+            torch.nn.Linear(nx + nu, h_units),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_units, h_units),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_units, h_units),
+            torch.nn.ReLU(),
+            torch.nn.Linear(h_units, nx)
+        ).double()
+    
+    # Load weights
+    model.load_state_dict(torch.load(weights_path))
+    
+    print(f"Model loaded from {run_dir}")
+    return model, params
 
 if __name__ == "__main__":
     # Constants - predefined for efficiency
@@ -224,7 +317,7 @@ if __name__ == "__main__":
             if epoch % 10 == 0:
                 logger.debug("ds %d epoch %d loss %f", dataset.shape[0], epoch, loss.item())
             
-            # Learning rate adjustment - uncommented
+            # Learning rate adjustment
             if epoch % 20 == 0:
                 scheduler.step()
                 
@@ -254,6 +347,35 @@ if __name__ == "__main__":
             current_model_error = E.mean().item()
             logger.info("Error with true dynamics theta %f theta_dt %f norm %f", 
                     dtheta.abs().mean(), dtheta_dt.abs().mean(), E.mean())
+        
+        # Save model weights after successful training (if enabled)
+        if args.save_model:
+            training_params = {
+                "dataset_size": dataset.shape[0],
+                "error_metrics": {
+                    "mean_norm_error": current_model_error,
+                    "mean_theta_error": dtheta.abs().mean().item(),
+                    "mean_thetadt_error": dtheta_dt.abs().mean().item()
+                },
+                "hyperparameters": {
+                    "hidden_units": H_UNITS,
+                    "train_epochs": TRAIN_EPOCH,
+                    "learning_rate": LEARNING_RATE,
+                    "ctrl_penalty": CTRL_PENALTY,
+                    "g": G,
+                    "m": M,
+                    "l": L,
+                    "dt": DT
+                },
+                "training_info": {
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "training_type": "bootstrap" if i < BOOT_STRAP_ITER else "online",
+                    "run_timestamp": RUN_TIMESTAMP
+                }
+            }
+            
+            # Save to the run directory, overwriting existing files
+            save_model_weights(network, training_params)
 
     # MPC and environment setup
     u_init = None
@@ -367,8 +489,8 @@ if __name__ == "__main__":
         collected_dataset[di, :nx] = state_tensor
         collected_dataset[di, nx:] = action
         
-        # Update monitoring - corrected parameter names and increased frequency
-        if args.plot and i % 5 == 0:  # Remove the i % 5 condition to update every iteration
+        # Update monitoring
+        if args.plot and i % 5 == 0:  # Update every 5 iterations to avoid overwhelming the plot
             monitor.update(
                 theta=angle_normalize(state[0]),
                 theta_dot=state[1],
@@ -392,11 +514,53 @@ if __name__ == "__main__":
     logger.info("Total reward: %f", total_reward)
     logger.info("Average computation time: %f seconds", np.mean(computation_times))
     
+    # Save final model if enabled
+    if args.save_model:
+        final_training_params = {
+            "final_results": {
+                "total_reward": total_reward,
+                "avg_computation_time": float(np.mean(computation_times)),
+                "iterations_completed": i + 1
+            },
+            "hyperparameters": {
+                "hidden_units": H_UNITS,
+                "train_epochs": TRAIN_EPOCH,
+                "learning_rate": LEARNING_RATE,
+                "ctrl_penalty": CTRL_PENALTY,
+                "g": G,
+                "m": M,
+                "l": L,
+                "dt": DT
+            },
+            "model_info": {
+                "dataset_size": dataset.shape[0] if dataset is not None else 0,
+                "bootstrap_iterations": BOOT_STRAP_ITER,
+                "retrain_interval": RETRAIN_AFTER_ITER
+            },
+            "run_info": {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "run_timestamp": RUN_TIMESTAMP,
+                "success": success_counter > 50 if 'success_counter' in dir() else False
+            }
+        }
+        
+        # Save the final model (overwriting previous saves in this run)
+        save_model_weights(network, final_training_params)
+        print(f"Final model weights saved to {RUN_DIR}")
+    
     # Save plots if enabled
     if args.plot:
-        monitor.save_plots(directory="pendulum_learning_plots", 
-                          filename_prefix="pendulum_learned_dynamics")
-        print(f"Plots saved to 'pendulum_learning_plots' directory")
+        # If saving models, also save the plots to the same run directory
+        if args.save_model and RUN_DIR:
+            plots_dir = os.path.join(RUN_DIR, "plots")
+            os.makedirs(plots_dir, exist_ok=True)
+            monitor.save_plots(directory=plots_dir, 
+                               filename_prefix="pendulum_learned_dynamics")
+            print(f"Plots saved to {plots_dir}")
+        else:
+            monitor.save_plots(directory="pendulum_learning_plots", 
+                               filename_prefix="pendulum_learned_dynamics")
+            print(f"Plots saved to 'pendulum_learning_plots' directory")
     
     # Clean up resources
     monitor.close()
