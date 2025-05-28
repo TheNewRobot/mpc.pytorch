@@ -6,3 +6,5 @@ examples/pendulum_mpc_plots/*
 
 __pycache__
 .ipynb_checkpoints
+model_weights/
+pendulum_learning_plots
