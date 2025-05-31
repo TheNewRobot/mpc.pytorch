@@ -3,6 +3,7 @@ dist
 *-info
 *.mp4
 examples/pendulum_mpc_plots/*
+build/
 
 __pycache__
 .ipynb_checkpoints

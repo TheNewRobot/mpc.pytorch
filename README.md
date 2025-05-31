@@ -37,3 +37,12 @@ If you want to need to un the examples in the simulator, you might need to insta
 ```bash
 pip install gymnasium==1.1.1 "gymnasium[classic_control]" matplotlib
 ```
+
+If you are running in Ubuntu 
+``` bash
+# For interactive plotting
+sudo apt install python3-tk
+
+# For LaTeX support in matplotlib
+sudo apt install texlive texlive-latex-extra dvipng cm-super
+```
