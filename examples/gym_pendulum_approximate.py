@@ -125,7 +125,11 @@ class FixedPendulumDynamics(torch.nn.Module):
         
         return torch.cat([next_theta, next_theta_dot], dim=1)
 
-def true_dynamics_tensor(state, action, dt=0.05, g=10.0, m=1.0, l=1.0):
+def true_dynamics_tensor(state, action, dt=0.05, g=9.81, m=1.0, l=1.0):
+    """
+    Correct pendulum dynamics that match Gym Pendulum-v1
+    This should replace the current true_dynamics_tensor function
+    """
     if len(state.shape) == 1:
         state = state.view(1, -1)
     if len(action.shape) == 1:
@@ -137,11 +141,16 @@ def true_dynamics_tensor(state, action, dt=0.05, g=10.0, m=1.0, l=1.0):
     theta_dot = state[:, 1:2]
     u = torch.clamp(action, -2.0, 2.0)
     
-    theta_ddot = -g / l * torch.sin(theta) + u / (m * l ** 2)
+    # CORRECT Gym Pendulum physics equations
+    # The gym pendulum uses: theta_ddot = -3*g/(2*l) * sin(theta + pi) + 3/(m*l^2) * u
+    theta_ddot = -3 * g / (2 * l) * torch.sin(theta + math.pi) + 3.0 / (m * l ** 2) * u
+    
     new_theta_dot = theta_dot + theta_ddot * dt
     new_theta_dot = torch.clamp(new_theta_dot, -8.0, 8.0)
     new_theta = theta + new_theta_dot * dt
-    new_theta = angle_normalize(new_theta)
+    
+    # Normalize angle to [-pi, pi]
+    new_theta = torch.atan2(torch.sin(new_theta), torch.cos(new_theta))
     
     return torch.cat([new_theta, new_theta_dot], dim=1)
 
@@ -181,26 +190,27 @@ def train_network(network, dataset, device, epochs=200, lr=0.001):
     return loss.item()
 
 def main():
-    # Get global variables
     global RUN_DIR, RUN_TIMESTAMP
     
-    # FIXED: Better parameters for swing-up learning
-    TIMESTEPS = 20  # Reduced for faster training
+    # FIXED: Use same gravity as reference script
+    G = 9.81  # Changed from 10.0 to match gym_pendulum.py
+    
+    # FIXED: Better MPC parameters for swing-up
+    TIMESTEPS = 10  # Reduced from 20, matching reference script
     N_BATCH = 1
-    LQR_ITER = 15   # Reduced for speed
+    LQR_ITER = 5   # Reduced from 15, matching reference script
     ACTION_LOW = -2.0
     ACTION_HIGH = 2.0
     DTYPE = torch.double
     
-    G = 10.0
     GOAL_STATE = torch.tensor([0.0, 0.0], dtype=DTYPE, device=DEVICE)
     
-    # FIXED: Much lower goal weights for better swing-up learning
-    GOAL_WEIGHTS = torch.tensor([20.0, 2.0], dtype=DTYPE, device=DEVICE)  # Reduced from [100.0, 10.0]
+    # FIXED: Use goal weights that work for swing-up (from reference script)
+    GOAL_WEIGHTS = torch.tensor([1.0, 0.1], dtype=DTYPE, device=DEVICE)  # Much lower weights
     
     H_UNITS = 64
-    BOOTSTRAP_ITER = 800  # Increased for better initial learning
-    RUN_ITER = 1500  # Increased for more training
+    BOOTSTRAP_ITER = 1000  # Increased for better initial learning
+    RUN_ITER = 2000  # Increased for more training
     
     nx, nu = 2, 1
     network = torch.nn.Sequential(
@@ -280,7 +290,7 @@ def main():
     
     # FIXED: MPC setup with better parameters
     # FIXED: Higher control penalty to prevent saturation
-    CTRL_PENALTY = 0.01  # Increased from 0.001
+    CTRL_PENALTY = 0.001  # Use same as reference script
     q = torch.cat((GOAL_WEIGHTS, CTRL_PENALTY * torch.ones(nu, dtype=DTYPE, device=DEVICE)))
     px = -torch.sqrt(GOAL_WEIGHTS) * GOAL_STATE
     p = torch.cat((px, torch.zeros(nu, dtype=DTYPE, device=DEVICE)))
@@ -293,10 +303,11 @@ def main():
         u_lower=ACTION_LOW, u_upper=ACTION_HIGH,
         lqr_iter=LQR_ITER,
         exit_unconverged=False,
-        eps=5e-2,  # FIXED: More relaxed tolerance
+        eps=1e-2,  # Use same tolerance as reference script
         n_batch=N_BATCH,
         backprop=False,
-        verbose=-1,
+        verbose=0,  # Reduce verbosity
+        
         grad_method=mpc.GradMethods.AUTO_DIFF
     )
     
@@ -305,11 +316,14 @@ def main():
     total_reward = 0
     success_count = 0
     data_buffer = []
-    RETRAIN_INTERVAL = 150  # More frequent retraining
+    RETRAIN_INTERVAL = 150
     mpc_failures = 0
-    
+
+    # FIXED: Initialize u_init for warm starting like reference script
+    u_init = None
+
     logger.info("Starting MPC control loop...")
-    
+
     for i in range(RUN_ITER):
         state = obs_to_state(obs)
         state_tensor = torch.tensor(state, dtype=DTYPE, device=DEVICE).view(1, -1)
@@ -318,32 +332,27 @@ def main():
             env.render()
         
         try:
-            # FIXED: Use MPC less frequently during training to allow exploration
-            if i < 500:  # Early phase - use MPC every 4 steps
-                use_mpc = (i % 4 == 0)
-            else:  # Later phase - use MPC every 2 steps
-                use_mpc = (i % 2 == 0)
+            # FIXED: Create MPC controller with u_init each time
+            ctrl = mpc.MPC(nx, nu, TIMESTEPS,
+                        u_lower=ACTION_LOW, u_upper=ACTION_HIGH,
+                        lqr_iter=LQR_ITER,
+                        exit_unconverged=False,
+                        eps=1e-2,
+                        n_batch=N_BATCH,
+                        backprop=False,
+                        verbose=-1,
+                        u_init=u_init,  # Pass u_init here during creation
+                        grad_method=mpc.GradMethods.AUTO_DIFF)
             
-            if use_mpc:
-                nominal_states, nominal_actions, _ = mpc_controller(state_tensor, cost, dynamics)
-                action = nominal_actions[0].cpu().detach().numpy().flatten()[0]
-                mpc_success = True
-            else:
-                # FIXED: Use energy-based exploration during training
-                theta = angle_normalize(state[0])
-                theta_dot = state[1]
-                current_energy = 0.5 * theta_dot**2 + G * (1 - math.cos(theta))
-                desired_energy = G * 2.0
-                
-                if current_energy < desired_energy * 0.8:
-                    # Energy pumping with some noise for exploration
-                    action = np.sign(theta_dot * math.cos(theta)) * (1.5 + 0.5 * np.random.random())
-                else:
-                    # Near target energy, add exploration noise
-                    action = -2.0 * theta - 1.0 * theta_dot + 0.3 * np.random.randn()
-                
-                action = np.clip(action, ACTION_LOW, ACTION_HIGH)
-                mpc_success = True  # Don't count exploration as failure
+            # Call MPC without u_init parameter
+            nominal_states, nominal_actions, _ = ctrl(state_tensor, cost, dynamics)
+            action = nominal_actions[0].cpu().detach().numpy().flatten()[0]
+            
+            # FIXED: Update u_init for next iteration
+            u_init = torch.cat((nominal_actions[1:], torch.zeros(1, N_BATCH, nu, dtype=DTYPE, device=DEVICE)), dim=0)
+            
+            mpc_success = True
+            
         except Exception as e:
             logger.warning(f"MPC failed: {e}, using energy-based control")
             theta_error = angle_normalize(state[0])
@@ -351,7 +360,9 @@ def main():
             action = np.clip(action, ACTION_LOW, ACTION_HIGH)
             mpc_success = False
             mpc_failures += 1
+            # Don't update u_init when MPC fails
         
+        # Rest of the loop remains the same...
         next_obs, reward, terminated, truncated, _ = env.step([action])
         total_reward += reward
         
@@ -361,7 +372,7 @@ def main():
         # Retrain periodically with more data
         if i > 0 and i % RETRAIN_INTERVAL == 0 and len(data_buffer) >= RETRAIN_INTERVAL:
             recent_data = torch.tensor(data_buffer[-RETRAIN_INTERVAL:], dtype=DTYPE)
-            retrain_loss = train_network(network, recent_data, DEVICE, epochs=200)  # More epochs
+            retrain_loss = train_network(network, recent_data, DEVICE, epochs=200)
             logger.info(f"Retrained network at step {i}. Loss: {retrain_loss:.6f}")
             
             # Save model after retraining
@@ -377,7 +388,7 @@ def main():
                         "learning_rate": 0.001,
                         "g": G,
                         "action_limits": [ACTION_LOW, ACTION_HIGH],
-                        "goal_weights": GOAL_WEIGHTS.cpu().tolist()  # FIXED: Save corrected weights
+                        "goal_weights": GOAL_WEIGHTS.cpu().tolist()
                     },
                     "training_info": {
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -388,9 +399,9 @@ def main():
                 }
                 save_model_weights(network, training_params)
         
-        # FIXED: More lenient success detection during training
+        # Success detection
         angle_error = abs(angle_normalize(state[0]))
-        if angle_error < 0.4 and abs(state[1]) < 2.0:  # More lenient
+        if angle_error < 0.3 and abs(state[1]) < 1.5:  # Reasonable success criteria
             success_count += 1
         else:
             success_count = 0
@@ -398,7 +409,7 @@ def main():
         if i % 50 == 0:
             status = "MPC" if mpc_success else "Fallback"
             logger.info(f"Step {i}: θ={angle_normalize(state[0]):.3f}, "
-                       f"θ̇={state[1]:.3f}, u={action:.3f}, r={reward:.3f} [{status}]")
+                    f"θ̇={state[1]:.3f}, u={action:.3f}, r={reward:.3f} [{status}]")
         
         if args.plot:
             monitor.update(
@@ -409,13 +420,15 @@ def main():
                 cu_reward=total_reward
             )
         
-        if success_count > 75:  # Reduced threshold
+        if success_count > 100:  # Sustained success
             logger.info(f"SUCCESS! Pendulum balanced at step {i}")
             break
         
         obs = next_obs
         if terminated or truncated:
             obs, _ = env.reset()
+            # Reset u_init when environment resets
+            u_init = None
     
     # Save final model with corrected parameters
     if args.save_model:
