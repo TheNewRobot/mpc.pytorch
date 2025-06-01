@@ -141,6 +141,7 @@ class DeployedDynamics(torch.nn.Module):
         return torch.cat([next_theta, next_theta_dot], dim=1)
 
 def main():
+
     print("Loading model...")
     start_time = time.time()
     
@@ -153,9 +154,10 @@ def main():
 
     # Extract parameters
     action_low, action_high = action_limits
+    g = 9.81  # Force consistent gravity
     
-    # FIXED: Reduce goal weights for better swing-up behavior
-    goal_weights_tensor = torch.tensor([20.0, 2.0], dtype=torch.double)  # Much lower weights
+    # FIXED: Use same goal weights as reference script
+    goal_weights_tensor = torch.tensor([1.0, 0.1], dtype=torch.double)  # Match training
     
     # Setup device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -163,27 +165,28 @@ def main():
     goal_weights_tensor = goal_weights_tensor.to(device)
     print(f"Using device: {device}")
     
-    # Create environment
+    # Create environment with correct gravity
     render_mode = "human" if args.render else None
-    env_kwargs = {"g": g}
+    env_kwargs = {"g": g}  # Use same g as training
     env = gym.make("Pendulum-v1", render_mode=render_mode, disable_env_checker=True, **env_kwargs)
     
     # Create dynamics model
     dynamics = DeployedDynamics(network, action_low, action_high, device)
     
-    # FIXED: MPC setup - OPTIMIZED FOR SWING-UP
-    TIMESTEPS = 20  # Slightly reduced
+    # FIXED: MPC setup - match reference script parameters
+    TIMESTEPS = 10  # Match reference script
     N_BATCH = 1
-    LQR_ITER = 15   # Reduced for faster computation
+    LQR_ITER = 5    # Match reference script
     nx, nu = 2, 1
+    
     DTYPE = torch.double
-    CTRL_PENALTY = 0.01  # FIXED: Increased control penalty to avoid saturation
-    EPS = 5e-2      # FIXED: More relaxed tolerance
+    CTRL_PENALTY = 0.001  # Match reference script
+    EPS = 1e-2      # Match reference script
     
     # Goal is upright position
     GOAL_STATE = torch.tensor([0.0, 0.0], dtype=DTYPE, device=device)
     
-    # FIXED: MPC cost setup with reduced weights
+    # FIXED: MPC cost setup with correct weights
     q = torch.cat((goal_weights_tensor, CTRL_PENALTY * torch.ones(nu, dtype=DTYPE, device=device)))
     px = -torch.sqrt(goal_weights_tensor) * GOAL_STATE
     p = torch.cat((px, torch.zeros(nu, dtype=DTYPE, device=device)))
@@ -191,16 +194,7 @@ def main():
     p = p.repeat(TIMESTEPS, N_BATCH, 1)
     cost = mpc.QuadCost(Q, p)
     
-    # Create MPC controller
-    mpc_controller = mpc.MPC(nx, nu, TIMESTEPS, 
-                            u_lower=action_low, u_upper=action_high, 
-                            lqr_iter=LQR_ITER,
-                            exit_unconverged=False, 
-                            eps=EPS,
-                            n_batch=N_BATCH, 
-                            backprop=False,
-                            verbose=-1,
-                            grad_method=mpc.GradMethods.AUTO_DIFF)
+    # REMOVED: Don't create MPC controller here, create it in the loop
     
     # Create monitor for plotting
     monitor = Monitor(enabled=args.plot, update_freq=1)
@@ -219,6 +213,9 @@ def main():
     print(f"Running model for {args.iterations} iterations...")
     print("Starting from downward position, attempting to swing up to upright...")
     
+    # FIXED: Initialize u_init here, before the loop
+    u_init = None
+
     for i in range(args.iterations):
         # Get current state from observation
         state = obs_to_state(observation)
@@ -230,61 +227,46 @@ def main():
         command_start = time.time()
         
         try:
-            # FIXED: Use MPC less frequently to allow for natural swing dynamics
-            if i < 200:  # Use MPC more in the beginning for initial swing-up
-                if i % 3 == 0:  # Every 3 steps instead of every step
-                    nominal_states, nominal_actions, nominal_objs = mpc_controller(
-                        state_tensor, cost, dynamics)
-                    action = nominal_actions[0].detach().cpu().numpy().flatten()
-                    mpc_used = True
-                else:
-                    # Use previous action with small decay
-                    if 'prev_action' in locals():
-                        action = prev_action * 0.95  # Slight decay
-                        action = np.clip(action, action_low, action_high)
-                    else:
-                        action = np.array([0.0])  # No action
-                    mpc_used = False
-            else:
-                # After initial swing-up phase, use MPC more frequently for stabilization
-                if i % 2 == 0:  # Every 2 steps
-                    nominal_states, nominal_actions, nominal_objs = mpc_controller(
-                        state_tensor, cost, dynamics)
-                    action = nominal_actions[0].detach().cpu().numpy().flatten()
-                    mpc_used = True
-                else:
-                    # Use previous action
-                    if 'prev_action' in locals():
-                        action = prev_action
-                    else:
-                        action = np.array([0.0])
-                    mpc_used = False
+            # FIXED: Create MPC controller with u_init each time
+            ctrl = mpc.MPC(nx, nu, TIMESTEPS, 
+                        u_lower=action_low, u_upper=action_high, 
+                        lqr_iter=LQR_ITER,
+                        exit_unconverged=False, 
+                        eps=EPS,
+                        n_batch=N_BATCH, 
+                        backprop=False,
+                        verbose=-1,
+                        u_init=u_init,  # Pass u_init during creation
+                        grad_method=mpc.GradMethods.AUTO_DIFF)
+            
+            # Call MPC without u_init parameter
+            nominal_states, nominal_actions, nominal_objs = ctrl(state_tensor, cost, dynamics)
+            action = nominal_actions[0].detach().cpu().numpy().flatten()
+            
+            # FIXED: Update u_init for next iteration
+            u_init = torch.cat((nominal_actions[1:], torch.zeros(1, N_BATCH, nu, device=device)), dim=0)
+            
+            mpc_used = True
             
         except Exception as e:
-            # Simple energy-based control when MPC fails
+            # Energy-based fallback control...
             theta = angle_normalize(state[0])
             theta_dot = state[1]
             
-            # Energy-based swing-up
             current_energy = 0.5 * theta_dot**2 + g * (1 - math.cos(theta))
-            desired_energy = g * 2.0  # Energy at top
+            desired_energy = g * 2.0
             
             if current_energy < desired_energy * 0.9:
-                # Pump energy
                 action = np.array([np.sign(theta_dot * math.cos(theta)) * action_high * 0.7])
             else:
-                # Near target energy, try to stabilize
                 action = np.array([-3.0 * theta - 1.0 * theta_dot])
                 action = np.clip(action, action_low, action_high)
             
             mpc_failures += 1
             mpc_used = False
             
-            if i % 100 == 0:  # Only log occasionally
+            if i % 100 == 0:
                 print(f"MPC failed at iteration {i}, using energy-based control: {e}")
-        
-        # Store previous action
-        prev_action = action.copy() if isinstance(action, np.ndarray) else np.array([action])
         
         elapsed = time.time() - command_start
         computation_times.append(elapsed)
@@ -297,13 +279,13 @@ def main():
             reward = float(reward.item())
         total_reward += reward
         
-        # Success detection - more lenient for initial success
+        # Success detection - same as before but more reasonable
         angle_error = abs(angle_normalize(state[0]))
         velocity_error = abs(state[1])
         
-        if angle_error < 0.3 and velocity_error < 2.0:  # More lenient initially
+        if angle_error < 0.2 and velocity_error < 1.0:  # Stricter success criteria
             success_counter += 1
-            if success_counter > 50:  # Reduced threshold
+            if success_counter > 100:  # Need sustained balance
                 print(f"SUCCESS! Pendulum balanced at iteration {i}")
                 print(f"Final angle error: {angle_error:.3f} rad ({math.degrees(angle_error):.1f}°)")
                 print(f"Final velocity error: {velocity_error:.3f} rad/s")
@@ -313,12 +295,12 @@ def main():
         
         # Progress logging
         if i % 50 == 0:
-            controller_type = "MPC" if mpc_used else "Passive/Energy"
+            controller_type = "MPC" if mpc_used else "Energy"
             print(f"Iter {i}: angle={angle_normalize(state[0]):.3f} "
-                  f"({math.degrees(angle_normalize(state[0])):.1f}°), "
-                  f"vel={state[1]:.3f}, action={action[0]:.3f}, "
-                  f"reward={reward:.2f}, ctrl={controller_type}, "
-                  f"time={elapsed*1000:.1f}ms")
+                f"({math.degrees(angle_normalize(state[0])):.1f}°), "
+                f"vel={state[1]:.3f}, action={action[0]:.3f}, "
+                f"reward={reward:.2f}, ctrl={controller_type}, "
+                f"time={elapsed*1000:.1f}ms")
             
         # Update monitoring
         if args.plot and i % 2 == 0:
