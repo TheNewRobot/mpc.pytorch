@@ -376,7 +376,7 @@ def main():
     learner = ParameterLearner(
         true_params=torch.tensor([10.0, 1.0, 1.0]),  # True: g=10, m=1.0, l=1.0
         n_episodes=150,
-        learning_rate=0.005,
+        learning_rate=0.009,
         verbose=True
     )
     
