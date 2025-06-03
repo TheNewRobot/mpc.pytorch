@@ -25,7 +25,7 @@ class PendulumMPCController:
                  # Physics parameters  
                  gravity=10.0, mass=1.0, length=1.0,
                  # Initial condition
-                 initial_angle=torch.pi/5,  # Default: hanging down (π), upright: 0, 45°: π/4
+                 initial_angle=torch.pi*3/4,  # Default: hanging down (π), upright: 0, 45°: π/4
                  initial_velocity=0.0,    # Initial angular velocity (rad/s)
                  # Experiment settings
                  save_video=True, verbose=True, name_dir="simple_pendulum_experiments",
