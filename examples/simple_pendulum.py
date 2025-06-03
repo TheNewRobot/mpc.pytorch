@@ -11,18 +11,18 @@ from mpc import mpc
 from mpc.mpc import QuadCost, GradMethods
 from mpc.env_dx import pendulum
 
-
 class PendulumMPCController:
     """Compact MPC controller for pendulum swing-up."""
     
     def __init__(self, 
                  # MPC tuning parameters
-                 mpc_horizon=20, total_timesteps=100, lqr_iterations=50,
+                 mpc_horizon=20, total_timesteps=150, lqr_iterations=50,
                  convergence_eps=1e-2, control_penalty=0.001,
                  # Physics parameters  
                  gravity=10.0, mass=1.0, length=1.0,
                  # Initial condition
-                 initial_angle=torch.pi*3/4,  # Default: hanging down (π), upright: 0, 45°: π/4
+                 initial_angle=torch.pi,  # Default: hanging down (π), upright: 0, 45°: π/4
+                 initial_velocity=1.0,    # Initial angular velocity (rad/s)
                  # Experiment settings
                  save_video=True, verbose=True):
         
@@ -33,6 +33,7 @@ class PendulumMPCController:
         self.convergence_eps = convergence_eps
         self.control_penalty = control_penalty
         self.initial_angle = initial_angle
+        self.initial_velocity = initial_velocity
         self.save_video = save_video
         self.verbose = verbose
         
@@ -57,11 +58,12 @@ class PendulumMPCController:
         if verbose:
             print(f"Experiment: {self.experiment_dir}")
             print(f"Initial angle: {self.initial_angle * 180 / np.pi:.1f}°")
+            print(f"Initial velocity: {self.initial_velocity:.2f} rad/s")
     
     def get_initial_state(self):
-        """Get initial state with configurable angle."""
+        """Get initial state with configurable angle and velocity."""
         angle = torch.tensor(self.initial_angle)
-        return torch.tensor([[torch.cos(angle), torch.sin(angle), 0.0]])
+        return torch.tensor([[torch.cos(angle), torch.sin(angle), self.initial_velocity]])
     
     def save_frame(self, state, timestep):
         """Save visualization frame."""
@@ -167,9 +169,14 @@ class PendulumMPCController:
 
 def main():
     """Run pendulum swing-up experiment."""
+    # Never forget to set the seed
+    seed = 42
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
     controller = PendulumMPCController(
         mpc_horizon=20,
-        total_timesteps=100,
+        total_timesteps=150,
         lqr_iterations=50,
         control_penalty=0.001
     )
