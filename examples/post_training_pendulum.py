@@ -189,8 +189,11 @@ class DualPendulumComparison(PendulumMPCController):
         fig, axes = plt.subplots(3, 1, figsize=(12, 10))
         
         # Angle comparison
-        axes[0].plot(time, true_angles, 'b-', linewidth=2, label=f'True {self.true_params.tolist()}')
-        axes[0].plot(time, learned_angles, 'r--', linewidth=2, label=f'Learned {self.learned_params.tolist()}')
+        true_params_str = f"[{self.true_params[0]:.2f}, {self.true_params[1]:.2f}, {self.true_params[2]:.2f}]"
+        learned_params_str = f"[{self.learned_params[0]:.2f}, {self.learned_params[1]:.2f}, {self.learned_params[2]:.2f}]"
+        
+        axes[0].plot(time, true_angles, 'b-', linewidth=2, label=f'True {true_params_str}')
+        axes[0].plot(time, learned_angles, 'r--', linewidth=2, label=f'Learned {learned_params_str}')
         axes[0].set_ylabel('Angle (degrees)')
         axes[0].set_title('Pendulum Angle Comparison')
         axes[0].grid(True, alpha=0.3)
