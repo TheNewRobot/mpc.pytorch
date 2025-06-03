@@ -11,6 +11,11 @@ from mpc import mpc
 from mpc.mpc import QuadCost, GradMethods
 from mpc.env_dx import pendulum
 
+# Enable LaTeX rendering for animations
+plt.rcParams['text.usetex'] = True
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Computer Modern Roman']
+
 class PendulumMPCController:
     """Compact MPC controller for pendulum swing-up."""
     
@@ -81,13 +86,16 @@ class PendulumMPCController:
         return torch.tensor([[torch.cos(angle), torch.sin(angle), self.initial_velocity]])
     
     def save_frame(self, state, timestep):
-        """Save visualization frame."""
+        """Save visualization frame with LaTeX styling."""
         fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
         self.dynamics.get_frame(state.squeeze(0), ax=ax)
         
         cos_th, sin_th, dth = state.squeeze(0)
         angle = np.arctan2(sin_th.item(), cos_th.item()) * 180 / np.pi
-        ax.set_title(f'Step {timestep}: θ={angle:.1f}°, ω={dth.item():.3f}')
+        
+        # Use LaTeX formatting for the title
+        title_text = f'Step {timestep}: $\\theta$={angle:.1f}$^\\circ$, $\\omega$={dth.item():.3f}'
+        ax.set_title(title_text)
         ax.axis('off')
         
         frame_path = os.path.join(self.experiment_dir, f'{timestep:03d}.png')
