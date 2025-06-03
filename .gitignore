@@ -2,7 +2,7 @@
 dist
 *-info
 *.mp4
-examples/pendulum_mpc_plots/*
+examples/pendulum_experiments/*
 build/
 
 __pycache__

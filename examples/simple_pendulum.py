@@ -24,7 +24,7 @@ class PendulumMPCController:
                  initial_angle=torch.pi,  # Default: hanging down (π), upright: 0, 45°: π/4
                  initial_velocity=1.0,    # Initial angular velocity (rad/s)
                  # Experiment settings
-                 save_video=True, verbose=True):
+                 save_video=True, verbose=True, name_dir="simple_pendulum_experiments"):
         
         # Store parameters
         self.mpc_horizon = mpc_horizon
@@ -36,6 +36,7 @@ class PendulumMPCController:
         self.initial_velocity = initial_velocity
         self.save_video = save_video
         self.verbose = verbose
+        self.name_dir = name_dir
         
         # Setup pendulum dynamics
         params = torch.tensor((gravity, mass, length))
@@ -52,7 +53,7 @@ class PendulumMPCController:
         
         # Create experiment directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.experiment_dir = f"pendulum_experiments/{timestamp}"
+        self.experiment_dir = f"pendulum_experiments/{self.name_dir}/{timestamp}"
         os.makedirs(self.experiment_dir, exist_ok=True)
         
         if verbose:
