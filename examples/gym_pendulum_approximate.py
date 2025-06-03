@@ -1,12 +1,12 @@
 """
-Fixed Pendulum Training Script
-==============================
+Fixed Pendulum Training Script - Key Parameter Corrections
+==========================================================
 
-Key fixes to match the deployment improvements:
-1. Reduced goal weights for better swing-up learning
-2. Increased control penalty to prevent saturation
-3. Better MPC parameters for training
-4. Progressive training strategy
+Main fixes:
+1. Increased control penalty to prevent saturation
+2. Better goal weights for swing-up behavior  
+3. More diverse training data collection
+4. Fixed MPC parameters matching working reference
 """
 
 import logging
@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from mpc import mpc
 from monitor import Monitor
+from simple_training_plots import SimpleTrainingPlotter
 
 parser = argparse.ArgumentParser(description='Fixed MPC Pendulum Training')
 parser.add_argument('--render', action='store_true', help='Enable rendering')
@@ -126,10 +127,7 @@ class FixedPendulumDynamics(torch.nn.Module):
         return torch.cat([next_theta, next_theta_dot], dim=1)
 
 def true_dynamics_tensor(state, action, dt=0.05, g=9.81, m=1.0, l=1.0):
-    """
-    Correct pendulum dynamics that match Gym Pendulum-v1
-    This should replace the current true_dynamics_tensor function
-    """
+    """Correct pendulum dynamics that match Gym Pendulum-v1"""
     if len(state.shape) == 1:
         state = state.view(1, -1)
     if len(action.shape) == 1:
@@ -142,7 +140,6 @@ def true_dynamics_tensor(state, action, dt=0.05, g=9.81, m=1.0, l=1.0):
     u = torch.clamp(action, -2.0, 2.0)
     
     # CORRECT Gym Pendulum physics equations
-    # The gym pendulum uses: theta_ddot = -3*g/(2*l) * sin(theta + pi) + 3/(m*l^2) * u
     theta_ddot = -3 * g / (2 * l) * torch.sin(theta + math.pi) + 3.0 / (m * l ** 2) * u
     
     new_theta_dot = theta_dot + theta_ddot * dt
@@ -189,28 +186,70 @@ def train_network(network, dataset, device, epochs=200, lr=0.001):
     network.eval()
     return loss.item()
 
+def collect_diverse_bootstrap_data(env, steps=1000):
+    """Collect diverse training data focusing on swing-up dynamics"""
+    data = []
+    obs, _ = env.reset()
+    
+    for i in range(steps):
+        state = obs_to_state(obs)
+        theta = angle_normalize(state[0])
+        theta_dot = state[1]
+        
+        # More strategic action selection for swing-up
+        if i < steps // 4:
+            # Random exploration
+            action = np.random.uniform(-2.0, 2.0)
+        elif i < steps // 2:
+            # Energy-based swing-up actions
+            if abs(theta) > np.pi/2:  # In lower half, pump energy
+                action = np.sign(theta_dot * np.cos(theta)) * np.random.uniform(1.0, 2.0)
+            else:  # In upper half, be more careful
+                action = np.random.uniform(-1.0, 1.0)
+        elif i < 3 * steps // 4:
+            # Focus on transitions between quadrants
+            if abs(theta) > 2.0:  # Near bottom
+                action = np.random.uniform(1.0, 2.0) * np.sign(theta_dot)
+            else:
+                action = np.random.uniform(-2.0, 2.0)
+        else:
+            # Mixed strategy with emphasis on control near upright
+            if abs(theta) < 1.0:  # Near upright
+                action = np.random.uniform(-1.0, 1.0)
+            else:
+                action = np.random.uniform(-2.0, 2.0)
+        
+        next_obs, reward, terminated, truncated, _ = env.step([action])
+        data.append([state[0], state[1], action])
+        
+        obs = next_obs
+        if terminated or truncated:
+            obs, _ = env.reset()
+    
+    return data
+
 def main():
     global RUN_DIR, RUN_TIMESTAMP
     
-    # FIXED: Use same gravity as reference script
-    G = 9.81  # Changed from 10.0 to match gym_pendulum.py
-    
-    # FIXED: Better MPC parameters for swing-up
-    TIMESTEPS = 10  # Reduced from 20, matching reference script
+    plotter = SimpleTrainingPlotter(save_dir=RUN_DIR if args.save_model else "training_plots")
+
+    # FIXED: Match exact parameters from working reference script
+    G = 9.81
+    TIMESTEPS = 10  # Same as reference
     N_BATCH = 1
-    LQR_ITER = 5   # Reduced from 15, matching reference script
+    LQR_ITER = 5    # Same as reference  
     ACTION_LOW = -2.0
     ACTION_HIGH = 2.0
     DTYPE = torch.double
     
     GOAL_STATE = torch.tensor([0.0, 0.0], dtype=DTYPE, device=DEVICE)
     
-    # FIXED: Use goal weights that work for swing-up (from reference script)
-    GOAL_WEIGHTS = torch.tensor([1.0, 0.1], dtype=DTYPE, device=DEVICE)  # Much lower weights
+    # FIXED: Use exact same goal weights as working reference
+    GOAL_WEIGHTS = torch.tensor([1.0, 0.1], dtype=DTYPE, device=DEVICE)
     
     H_UNITS = 64
-    BOOTSTRAP_ITER = 1000  # Increased for better initial learning
-    RUN_ITER = 2000  # Increased for more training
+    BOOTSTRAP_ITER = 1500  # More diverse data
+    RUN_ITER = 4000        # More training time
     
     nx, nu = 2, 1
     network = torch.nn.Sequential(
@@ -230,39 +269,13 @@ def main():
     env = gym.make("Pendulum-v1", render_mode="human" if args.render else None, g=G)
     monitor = Monitor(enabled=args.plot, update_freq=1)
     
-    # FIXED: Better bootstrap data collection with diverse states
+    # FIXED: Better bootstrap data collection
     logger.info(f"Collecting diverse bootstrap data for {BOOTSTRAP_ITER} steps...")
-    bootstrap_data = []
-    obs, _ = env.reset()
-    
-    for i in range(BOOTSTRAP_ITER):
-        state = obs_to_state(obs)
-        
-        # FIXED: More diverse action sampling for better exploration
-        if i < BOOTSTRAP_ITER // 3:
-            # Random actions for exploration
-            action = np.random.uniform(ACTION_LOW, ACTION_HIGH)
-        elif i < 2 * BOOTSTRAP_ITER // 3:
-            # Energy-based actions for swing-up patterns
-            theta = angle_normalize(state[0])
-            theta_dot = state[1]
-            if abs(theta) > np.pi/2:  # In lower half
-                action = np.sign(theta_dot * np.cos(theta)) * np.random.uniform(0.5, 2.0)
-            else:
-                action = np.random.uniform(ACTION_LOW, ACTION_HIGH)
-        else:
-            # Mixed strategy
-            action = np.random.uniform(ACTION_LOW, ACTION_HIGH)
-        
-        next_obs, reward, terminated, truncated, _ = env.step([action])
-        bootstrap_data.append([state[0], state[1], action])
-        obs = next_obs
-        if terminated or truncated:
-            obs, _ = env.reset()
+    bootstrap_data = collect_diverse_bootstrap_data(env, BOOTSTRAP_ITER)
     
     dataset = torch.tensor(bootstrap_data, dtype=DTYPE)
     logger.info("Training network on bootstrap data...")
-    train_loss = train_network(network, dataset, DEVICE, epochs=1500)  # More epochs
+    train_loss = train_network(network, dataset, DEVICE, epochs=2000)  # More training
     logger.info(f"Bootstrap training completed. Final loss: {train_loss:.6f}")
     
     # Save model after bootstrap training
@@ -278,7 +291,7 @@ def main():
                 "learning_rate": 0.001,
                 "g": G,
                 "action_limits": [ACTION_LOW, ACTION_HIGH],
-                "goal_weights": GOAL_WEIGHTS.cpu().tolist()  # FIXED: Save the corrected weights
+                "goal_weights": GOAL_WEIGHTS.cpu().tolist()
             },
             "training_info": {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -288,9 +301,7 @@ def main():
         }
         save_model_weights(network, training_params)
     
-    # FIXED: MPC setup with better parameters
-    # FIXED: Higher control penalty to prevent saturation
-    CTRL_PENALTY = 0.001  # Use same as reference script
+    CTRL_PENALTY = 0.1  # 100x higher than original (was 0.001)
     q = torch.cat((GOAL_WEIGHTS, CTRL_PENALTY * torch.ones(nu, dtype=DTYPE, device=DEVICE)))
     px = -torch.sqrt(GOAL_WEIGHTS) * GOAL_STATE
     p = torch.cat((px, torch.zeros(nu, dtype=DTYPE, device=DEVICE)))
@@ -298,28 +309,13 @@ def main():
     p = p.repeat(TIMESTEPS, N_BATCH, 1)
     cost = mpc.QuadCost(Q, p)
     
-    mpc_controller = mpc.MPC(
-        nx, nu, TIMESTEPS,
-        u_lower=ACTION_LOW, u_upper=ACTION_HIGH,
-        lqr_iter=LQR_ITER,
-        exit_unconverged=False,
-        eps=1e-2,  # Use same tolerance as reference script
-        n_batch=N_BATCH,
-        backprop=False,
-        verbose=0,  # Reduce verbosity
-        
-        grad_method=mpc.GradMethods.AUTO_DIFF
-    )
-    
     # Main training loop
     obs, _ = env.reset()
     total_reward = 0
     success_count = 0
     data_buffer = []
-    RETRAIN_INTERVAL = 150
+    RETRAIN_INTERVAL = 200  # Less frequent retraining
     mpc_failures = 0
-
-    # FIXED: Initialize u_init for warm starting like reference script
     u_init = None
 
     logger.info("Starting MPC control loop...")
@@ -332,7 +328,7 @@ def main():
             env.render()
         
         try:
-            # FIXED: Create MPC controller with u_init each time
+
             ctrl = mpc.MPC(nx, nu, TIMESTEPS,
                         u_lower=ACTION_LOW, u_upper=ACTION_HIGH,
                         lqr_iter=LQR_ITER,
@@ -341,28 +337,37 @@ def main():
                         n_batch=N_BATCH,
                         backprop=False,
                         verbose=-1,
-                        u_init=u_init,  # Pass u_init here during creation
+                        u_init=u_init,
                         grad_method=mpc.GradMethods.AUTO_DIFF)
             
-            # Call MPC without u_init parameter
             nominal_states, nominal_actions, _ = ctrl(state_tensor, cost, dynamics)
             action = nominal_actions[0].cpu().detach().numpy().flatten()[0]
             
-            # FIXED: Update u_init for next iteration
+            # Update u_init for next iteration
             u_init = torch.cat((nominal_actions[1:], torch.zeros(1, N_BATCH, nu, dtype=DTYPE, device=DEVICE)), dim=0)
             
             mpc_success = True
             
         except Exception as e:
-            logger.warning(f"MPC failed: {e}, using energy-based control")
+            # Better fallback controller for large angles
             theta_error = angle_normalize(state[0])
-            action = -3.0 * theta_error - 1.5 * state[1]
+            theta_dot = state[1]
+            
+            # Energy-based control for swing-up with smoother transitions
+            current_energy = 0.5 * theta_dot**2 + 9.81 * (1 - math.cos(theta_error))
+            desired_energy = 9.81 * 2.0  # Energy needed to reach top
+            
+            if current_energy < desired_energy * 0.8:  # Need more energy
+                # Pump energy in direction of motion
+                action = np.sign(theta_dot * np.cos(theta_error)) * 1.5
+            else:  # Near enough energy, try to control
+                # PD control around upright
+                action = -2.0 * theta_error - 1.0 * theta_dot
+            
             action = np.clip(action, ACTION_LOW, ACTION_HIGH)
             mpc_success = False
             mpc_failures += 1
-            # Don't update u_init when MPC fails
         
-        # Rest of the loop remains the same...
         next_obs, reward, terminated, truncated, _ = env.step([action])
         total_reward += reward
         
@@ -372,9 +377,16 @@ def main():
         # Retrain periodically with more data
         if i > 0 and i % RETRAIN_INTERVAL == 0 and len(data_buffer) >= RETRAIN_INTERVAL:
             recent_data = torch.tensor(data_buffer[-RETRAIN_INTERVAL:], dtype=DTYPE)
-            retrain_loss = train_network(network, recent_data, DEVICE, epochs=200)
+            retrain_loss = train_network(network, recent_data, DEVICE, epochs=300)
             logger.info(f"Retrained network at step {i}. Loss: {retrain_loss:.6f}")
             
+
+            plotter.update(iteration=i, 
+                   imitation_loss=retrain_loss, 
+                   reward=total_reward, 
+                   angle_error=abs(angle_normalize(state[0])))
+
+
             # Save model after retraining
             if args.save_model:
                 training_params = {
@@ -388,7 +400,8 @@ def main():
                         "learning_rate": 0.001,
                         "g": G,
                         "action_limits": [ACTION_LOW, ACTION_HIGH],
-                        "goal_weights": GOAL_WEIGHTS.cpu().tolist()
+                        "goal_weights": GOAL_WEIGHTS.cpu().tolist(),
+                        "control_penalty": CTRL_PENALTY  # Save the higher penalty
                     },
                     "training_info": {
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -401,15 +414,17 @@ def main():
         
         # Success detection
         angle_error = abs(angle_normalize(state[0]))
-        if angle_error < 0.3 and abs(state[1]) < 1.5:  # Reasonable success criteria
+        if angle_error < 0.3 and abs(state[1]) < 1.5:
             success_count += 1
         else:
             success_count = 0
         
+        # More detailed logging to track control saturation
         if i % 50 == 0:
             status = "MPC" if mpc_success else "Fallback"
+            action_sat = "SAT!" if abs(action) > 1.9 else "OK"  # Tighter saturation check
             logger.info(f"Step {i}: θ={angle_normalize(state[0]):.3f}, "
-                    f"θ̇={state[1]:.3f}, u={action:.3f}, r={reward:.3f} [{status}]")
+                    f"θ̇={state[1]:.3f}, u={action:.3f}[{action_sat}], r={reward:.3f} [{status}]")
         
         if args.plot:
             monitor.update(
@@ -420,24 +435,23 @@ def main():
                 cu_reward=total_reward
             )
         
-        if success_count > 100:  # Sustained success
+        if success_count > 150:  # More strict success criteria
             logger.info(f"SUCCESS! Pendulum balanced at step {i}")
             break
         
         obs = next_obs
         if terminated or truncated:
             obs, _ = env.reset()
-            # Reset u_init when environment resets
             u_init = None
     
-    # Save final model with corrected parameters
+    # Save final model
     if args.save_model:
         final_training_params = {
             "final_results": {
                 "total_reward": float(total_reward),
                 "final_angle_error": float(abs(angle_normalize(state[0]))),
                 "iterations_completed": i + 1,
-                "success": success_count > 75,
+                "success": success_count > 100,
                 "mpc_failures": mpc_failures
             },
             "hyperparameters": {
@@ -447,8 +461,8 @@ def main():
                 "learning_rate": 0.001,
                 "g": G,
                 "action_limits": [ACTION_LOW, ACTION_HIGH],
-                "goal_weights": GOAL_WEIGHTS.cpu().tolist(),  # FIXED: Corrected weights
-                "control_penalty": CTRL_PENALTY  # FIXED: Save control penalty
+                "goal_weights": GOAL_WEIGHTS.cpu().tolist(),
+                "control_penalty": CTRL_PENALTY  # Save the corrected penalty
             },
             "model_info": {
                 "dataset_size": len(data_buffer),
@@ -457,7 +471,7 @@ def main():
             "run_info": {
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "run_timestamp": RUN_TIMESTAMP if args.save_model else "unknown",
-                "success": success_count > 75
+                "success": success_count > 100
             }
         }
         save_model_weights(network, final_training_params)
@@ -476,6 +490,13 @@ def main():
         else:
             monitor.save_plots(filename_prefix="training")
     
+
+    logger.info("Creating training progress plots...")
+    plotter.plot_training_progress()
+    plotter.print_summary()
+
+    print(f"Training plots saved to: {plotter.save_dir}")
+
     monitor.close()
     env.close()
 
