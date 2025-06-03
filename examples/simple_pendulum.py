@@ -28,7 +28,8 @@ class PendulumMPCController:
                  initial_angle=torch.pi/5,  # Default: hanging down (π), upright: 0, 45°: π/4
                  initial_velocity=0.0,    # Initial angular velocity (rad/s)
                  # Experiment settings
-                 save_video=True, verbose=True, name_dir="simple_pendulum_experiments"):
+                 save_video=True, verbose=True, name_dir="simple_pendulum_experiments",
+                 seed = 42):
         
         # Store parameters
         self.mpc_horizon = mpc_horizon
@@ -44,6 +45,7 @@ class PendulumMPCController:
         self.control_authority = control_authority
         self.n_states = n_states
         self.n_control = n_control
+        self.seed = seed
 
         # Setup pendulum dynamics
         params = torch.tensor((gravity, mass, length))
@@ -62,12 +64,17 @@ class PendulumMPCController:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.experiment_dir = f"pendulum_experiments/{self.name_dir}/{timestamp}"
         os.makedirs(self.experiment_dir, exist_ok=True)
+        self.set_seed()
         
         if verbose:
             print(f"Experiment: {self.experiment_dir}")
             print(f"Initial angle: {self.initial_angle * 180 / np.pi:.1f}°")
             print(f"Initial velocity: {self.initial_velocity:.2f} rad/s")
     
+    def set_seed(self):
+        torch.manual_seed(self.seed)
+        np.random.seed(self.seed)
+
     def get_initial_state(self):
         """Get initial state with configurable angle and velocity."""
         angle = torch.tensor(self.initial_angle)
@@ -177,9 +184,6 @@ class PendulumMPCController:
 def main():
     """Run pendulum swing-up experiment."""
     # Never forget to set the seed
-    seed = 42
-    torch.manual_seed(seed)
-    np.random.seed(seed)
 
     controller = PendulumMPCController(
         mpc_horizon=20,
