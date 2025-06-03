@@ -1,126 +1,182 @@
 #!/usr/bin/env python3
 
 import torch
-from torch.autograd import Variable
 import numpy as np
 import matplotlib.pyplot as plt
 import os
 from tqdm import tqdm
+from datetime import datetime
 
 from mpc import mpc
-from mpc.mpc import QuadCost, LinDx, GradMethods
+from mpc.mpc import QuadCost, GradMethods
 from mpc.env_dx import pendulum
 
-# Parameters
-params = torch.tensor((10., 1., 1.))
-dx = pendulum.PendulumDx(params, simple=True)
 
-n_batch, T, mpc_T = 16, 100, 20
-
-def uniform(shape, low, high):
-    r = high-low
-    return torch.rand(shape)*r+low
-
-# Initialize random starting states
-torch.manual_seed(0)
-th = uniform(n_batch, -(1/2)*np.pi, (1/2)*np.pi)
-thdot = uniform(n_batch, -1., 1.)
-xinit = torch.stack((torch.cos(th), torch.sin(th), thdot), dim=1)
-
-x = xinit
-u_init = None
-
-# Cost setup for swingup
-mode = 'swingup'
-
-if mode == 'swingup':
-    goal_weights = torch.Tensor((1., 1., 0.1))
-    goal_state = torch.Tensor((1., 0. ,0.))
-    ctrl_penalty = 0.001
-    q = torch.cat((
-        goal_weights,
-        ctrl_penalty*torch.ones(dx.n_ctrl)
-    ))
-    px = -torch.sqrt(goal_weights)*goal_state
-    p = torch.cat((px, torch.zeros(dx.n_ctrl)))
-    Q = torch.diag(q).unsqueeze(0).unsqueeze(0).repeat(
-        mpc_T, n_batch, 1, 1
-    )
-    p = p.unsqueeze(0).repeat(mpc_T, n_batch, 1)
-
-# Create temporary directory for frames
-import tempfile
-t_dir = tempfile.mkdtemp()
-print('Creating frames in temporary directory...')
-
-# Main MPC loop
-for t in tqdm(range(T)):
-    nominal_states, nominal_actions, nominal_objs = mpc.MPC(
-        dx.n_state, dx.n_ctrl, mpc_T,
-        u_init=u_init,
-        u_lower=dx.lower, u_upper=dx.upper,
-        lqr_iter=50,
-        verbose=0,
-        exit_unconverged=False,
-        detach_unconverged=False,
-        linesearch_decay=dx.linesearch_decay,
-        max_linesearch_iter=dx.max_linesearch_iter,
-        grad_method=GradMethods.AUTO_DIFF,
-        eps=1e-2,
-    )(x, QuadCost(Q, p), dx)
+class PendulumMPCController:
+    """Compact MPC controller for pendulum swing-up."""
     
-    next_action = nominal_actions[0]
-    u_init = torch.cat((nominal_actions[1:], torch.zeros(1, n_batch, dx.n_ctrl)), dim=0)
-    u_init[-2] = u_init[-3]
-    x = dx(x, next_action)
+    def __init__(self, 
+                 # MPC tuning parameters
+                 mpc_horizon=20, total_timesteps=100, lqr_iterations=50,
+                 convergence_eps=1e-2, control_penalty=0.001,
+                 # Physics parameters  
+                 gravity=10.0, mass=1.0, length=1.0,
+                 # Initial condition
+                 initial_angle=torch.pi*3/4,  # Default: hanging down (π), upright: 0, 45°: π/4
+                 # Experiment settings
+                 save_video=True, verbose=True):
+        
+        # Store parameters
+        self.mpc_horizon = mpc_horizon
+        self.total_timesteps = total_timesteps
+        self.lqr_iterations = lqr_iterations
+        self.convergence_eps = convergence_eps
+        self.control_penalty = control_penalty
+        self.initial_angle = initial_angle
+        self.save_video = save_video
+        self.verbose = verbose
+        
+        # Setup pendulum dynamics
+        params = torch.tensor((gravity, mass, length))
+        self.dynamics = pendulum.PendulumDx(params, simple=True)
+        
+        # Setup cost function (upright position: cos(0)=1, sin(0)=0, vel=0)
+        goal_weights = torch.tensor([1.0, 1.0, 0.1])  # [pos, pos, vel]
+        q = torch.cat((goal_weights, control_penalty * torch.ones(1)))
+        px = -torch.sqrt(goal_weights) * torch.tensor([1.0, 0.0, 0.0])
+        p = torch.cat((px, torch.zeros(1)))
+        
+        self.Q = torch.diag(q).unsqueeze(0).unsqueeze(0).repeat(mpc_horizon, 1, 1, 1)
+        self.p = p.unsqueeze(0).repeat(mpc_horizon, 1, 1)
+        
+        # Create experiment directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.experiment_dir = f"pendulum_experiments/{timestamp}"
+        os.makedirs(self.experiment_dir, exist_ok=True)
+        
+        if verbose:
+            print(f"Experiment: {self.experiment_dir}")
+            print(f"Initial angle: {self.initial_angle * 180 / np.pi:.1f}°")
+    
+    def get_initial_state(self):
+        """Get initial state with configurable angle."""
+        angle = torch.tensor(self.initial_angle)
+        return torch.tensor([[torch.cos(angle), torch.sin(angle), 0.0]])
+    
+    def save_frame(self, state, timestep):
+        """Save visualization frame."""
+        fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+        self.dynamics.get_frame(state.squeeze(0), ax=ax)
+        
+        cos_th, sin_th, dth = state.squeeze(0)
+        angle = np.arctan2(sin_th.item(), cos_th.item()) * 180 / np.pi
+        ax.set_title(f'Step {timestep}: θ={angle:.1f}°, ω={dth.item():.3f}')
+        ax.axis('off')
+        
+        frame_path = os.path.join(self.experiment_dir, f'{timestep:03d}.png')
+        # Save with fixed dimensions (600x600 pixels, divisible by 2)
+        fig.savefig(frame_path, bbox_inches='tight', dpi=100, 
+                   facecolor='white', pad_inches=0.1)
+        plt.close(fig)
+        return frame_path
+    
+    def create_video(self):
+        """Create video from frames."""
+        video_path = os.path.join(self.experiment_dir, 'pendulum_swingup.mp4')
+        # Use scale filter to ensure dimensions are divisible by 2
+        cmd = f'ffmpeg -y -r 16 -i {self.experiment_dir}/%03d.png -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec libx264 -pix_fmt yuv420p {video_path}'
+        
+        if os.system(cmd) == 0:
+            # Clean up frames
+            for f in os.listdir(self.experiment_dir):
+                if f.endswith('.png'):
+                    os.remove(os.path.join(self.experiment_dir, f))
+            return video_path
+        else:
+            if self.verbose:
+                print("Video creation failed - keeping frames for inspection")
+            return None
+    
+    def run_experiment(self):
+        """Run the pendulum swing-up experiment."""
+        if self.verbose:
+            print("Starting pendulum swing-up...")
+        
+        # Initialize
+        state = self.get_initial_state()
+        u_init = None
+        
+        # Create MPC controller
+        mpc_controller = mpc.MPC(
+            n_state=3, n_ctrl=1, T=self.mpc_horizon,
+            u_lower=-2.0, u_upper=2.0, lqr_iter=self.lqr_iterations,
+            verbose=0, exit_unconverged=False, detach_unconverged=False,
+            grad_method=GradMethods.AUTO_DIFF, eps=self.convergence_eps
+        )
+        
+        costs = []
+        
+        # Main control loop
+        progress = tqdm(range(self.total_timesteps)) if self.verbose else range(self.total_timesteps)
+        
+        for t in progress:
+            # Solve MPC
+            _, actions, cost = mpc_controller(state, QuadCost(self.Q, self.p), self.dynamics)
+            
+            # Apply control and update state
+            action = actions[0]
+            state = self.dynamics(state, action)
+            costs.append(cost[0].item())
+            
+            # Warm start next iteration
+            u_init = torch.cat((actions[1:], actions[-1:]), dim=0)
+            
+            # Save frame
+            if self.save_video:
+                self.save_frame(state, t)
+            
+            # Update progress
+            if self.verbose:
+                cos_th, sin_th, _ = state.squeeze(0)
+                angle = np.arctan2(sin_th.item(), cos_th.item()) * 180 / np.pi
+                progress.set_postfix({'angle': f'{angle:.1f}°', 'cost': f'{cost[0].item():.3f}'})
+        
+        # Final analysis
+        cos_th, sin_th, dth = state.squeeze(0)
+        final_angle = np.arctan2(sin_th.item(), cos_th.item()) * 180 / np.pi
+        success = abs(final_angle) < 10  # Within 10 degrees of upright
+        
+        # Create video
+        video_path = self.create_video() if self.save_video else None
+        
+        results = {
+            'success': success,
+            'final_angle': final_angle,
+            'final_velocity': dth.item(),
+            'total_cost': sum(costs),
+            'video_path': video_path
+        }
+        
+        if self.verbose:
+            print(f"\nResults: Success={success}, Final angle={final_angle:.1f}°")
+            if video_path:
+                print(f"Video: {video_path}")
+        
+        return results
 
-    # Create visualization
-    n_row, n_col = 4, 4
-    fig, axs = plt.subplots(n_row, n_col, figsize=(3*n_col,3*n_row))
-    axs = axs.reshape(-1)
-    for i in range(n_batch):
-        dx.get_frame(x[i], ax=axs[i])
-        axs[i].get_xaxis().set_visible(False)
-        axs[i].get_yaxis().set_visible(False)
-    fig.tight_layout()
-    fig.savefig(os.path.join(t_dir, '{:03d}.png'.format(t)))
-    plt.close(fig)
 
-# Create video in current directory
-vid_fname = 'pendulum-{}.mp4'.format(mode)
+def main():
+    """Run pendulum swing-up experiment."""
+    controller = PendulumMPCController(
+        mpc_horizon=20,
+        total_timesteps=100,
+        lqr_iterations=50,
+        control_penalty=0.001
+    )
+    
+    results = controller.run_experiment()
+    print(f"Swing-up {'successful' if results['success'] else 'failed'}!")
 
-if os.path.exists(vid_fname):
-    os.remove(vid_fname)
 
-# Try different ffmpeg commands
-cmd = 'ffmpeg -y -r 16 -f image2 -i {}/%03d.png -vcodec libx264 -crf 25 -pix_fmt yuv420p {}'.format(
-    t_dir, vid_fname
-)
-print(f'Running: {cmd}')
-result = os.system(cmd)
-
-if result != 0:
-    print("ffmpeg failed, trying alternative...")
-    cmd = 'ffmpeg -y -framerate 16 -i {}/%03d.png -c:v libx264 -pix_fmt yuv420p {}'.format(t_dir, vid_fname)
-    result = os.system(cmd)
-
-if os.path.exists(vid_fname):
-    print(f'Video saved as: {os.path.abspath(vid_fname)}')
-else:
-    print('Video creation failed. Check if ffmpeg is installed.')
-    print(f'Frames are in: {t_dir}')
-
-# Clean up temporary files only if video was created
-if os.path.exists(vid_fname):
-    import shutil
-    shutil.rmtree(t_dir)
-    print('Temporary frames cleaned up')
-else:
-    print('Keeping frames for debugging')
-
-# Display final states
-print("Final pendulum states (first 4):")
-for i in range(min(4, n_batch)):
-    cos_th, sin_th, dth = x[i]
-    th = np.arctan2(sin_th.item(), cos_th.item())
-    print(f"Pendulum {i}: θ={th*180/np.pi:.1f}°, ω={dth.item():.3f} rad/s")
+if __name__ == '__main__':
+    main()
