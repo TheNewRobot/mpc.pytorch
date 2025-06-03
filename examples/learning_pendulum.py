@@ -12,6 +12,8 @@ from datetime import datetime
 from mpc import mpc
 from mpc.mpc import QuadCost, GradMethods
 from mpc.env_dx import pendulum
+import json
+import pickle
 
 class LearnablePendulumDx(nn.Module):
     """Wrapper around pendulum.PendulumDx with learnable parameters."""
@@ -45,6 +47,9 @@ class ParameterLearner:
                  n_episodes=50,
                  episode_length=80,
                  learning_rate=0.01,
+                 # Test
+                 initial_angle = np.pi/5,
+                 initial_vel = 0.0,
                  verbose=True,
                  save_video=True,
                  seed=42):
@@ -55,13 +60,15 @@ class ParameterLearner:
         self.n_episodes = n_episodes
         self.episode_length = episode_length
         self.learning_rate = learning_rate
+        self.initial_angle = initial_angle
+        self.initial_vel = initial_vel
         self.verbose = verbose
         self.save_video = save_video
         
         # Create initial parameter guess (add noise to true params)
         if init_guess is None:
             init_guess = true_params + torch.randn_like(true_params) * 0.5
-            init_guess = torch.clamp(init_guess, 0.1, 12.0)
+            init_guess = torch.clamp(init_guess, 0.1, 12.0) # TODO
         self.init_guess = init_guess
         
         # Create true dynamics (ground truth)
@@ -204,13 +211,12 @@ class ParameterLearner:
         # Keep parameters in reasonable bounds
         with torch.no_grad():
             self.learnable_dynamics.params.data = torch.clamp(
-                self.learnable_dynamics.params.data, 0.1, 20.0
+                self.learnable_dynamics.params.data, 0.1, 12.0 # TODO
             )
         
         return loss.item()
     
     def evaluate_learned_model(self):
-        breakpoint()
         """Test learned model on swing-up task."""
         Q, p = self.get_cost_matrices()
         
@@ -225,13 +231,13 @@ class ParameterLearner:
         )
         
         # Start hanging down
-        state = torch.tensor([[np.cos(np.pi), np.sin(np.pi), 0.0]], dtype=torch.float32)
+        state = torch.tensor([[np.cos(self.initial_angle), np.sin(self.initial_angle), self.initial_vel]], dtype=torch.float32)
         states = [state]
         
-        for t in range(100):
+        for t in range(150):
             try:
                 _, actions, _ = eval_mpc(state, QuadCost(Q, p), self.learnable_dynamics)
-                action = actions[0:1]
+                action = actions[0]
                 state = self.learnable_dynamics(state, action).float()
                 states.append(state)
                 
@@ -304,7 +310,7 @@ class ParameterLearner:
             current_params = self.learnable_dynamics.params.detach().clone()
             param_history.append(current_params)
             
-            if self.verbose and episode % 10 == 0:
+            if self.verbose and episode % 2 == 0: # TODO
                 param_error = torch.norm(current_params - self.true_params).item()
                 progress.set_postfix({
                     'loss': f'{loss:.4f}',
@@ -323,7 +329,6 @@ class ParameterLearner:
         param_error = torch.norm(final_params - self.true_params).item()
         
         results = {
-            'success': success,
             'final_angle': final_angle,
             'true_params': self.true_params.tolist(),
             'initial_guess': self.init_guess.tolist(),
@@ -345,19 +350,38 @@ class ParameterLearner:
                 print(f"Video saved: {video_path}")
         
         return results
+    
+    def save_training_logs(self, results):
+        """Save training logs for later analysis."""
+        
+        # Save as JSON (human readable)
+        json_path = os.path.join(self.experiment_dir, 'training_logs.json')
+        pickle_path = os.path.join(self.experiment_dir, 'training_logs.pkl')
 
+        with open(json_path, 'w') as f:
+            json.dump(results, f, indent=2)  # Note: using 'logs', not 'results'
+        with open(pickle_path, 'wb') as f:
+            pickle.dump(results, f)
+        
+        if self.verbose:
+            print(f"Training logs saved to:")
+            print(f"  JSON: {json_path}")
+            print(f"  Pickle: {pickle_path}")
+        
+        return json_path, pickle_path
 
 def main():
     """Run parameter learning experiment."""
     
     learner = ParameterLearner(
-        true_params=torch.tensor([10.0, 1.0, 1.0]),  # True: g=10, m=1.5, l=0.8
-        n_episodes=100,
+        true_params=torch.tensor([10.0, 1.0, 1.0]),  # True: g=10, m=1.0, l=1.0
+        n_episodes=150,
         learning_rate=0.005,
         verbose=True
     )
     
     results = learner.run_experiment()
+    _, _ = learner.save_training_logs(results)
     
     print("\n" + "="*50)
     print("PARAMETER LEARNING SUMMARY")
@@ -366,7 +390,6 @@ def main():
     print(f"Swing-up Success: {results['success']}")
     print(f"True params:    {results['true_params']}")
     print(f"Learned params: {results['learned_params']}")
-
 
 if __name__ == '__main__':
     main()
