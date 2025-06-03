@@ -16,13 +16,17 @@ class PendulumMPCController:
     
     def __init__(self, 
                  # MPC tuning parameters
-                 mpc_horizon=20, total_timesteps=150, lqr_iterations=50,
+                 mpc_horizon = 20, total_timesteps=150, lqr_iterations=50,
                  convergence_eps=1e-2, control_penalty=0.001,
+                 # Model
+                 n_states = 3, # sint, cost, dt
+                 n_control = 1, # torque
+                 control_authority : float = 2.0, # Never change this ()
                  # Physics parameters  
                  gravity=10.0, mass=1.0, length=1.0,
                  # Initial condition
-                 initial_angle=torch.pi,  # Default: hanging down (π), upright: 0, 45°: π/4
-                 initial_velocity=1.0,    # Initial angular velocity (rad/s)
+                 initial_angle=torch.pi/5,  # Default: hanging down (π), upright: 0, 45°: π/4
+                 initial_velocity=0.0,    # Initial angular velocity (rad/s)
                  # Experiment settings
                  save_video=True, verbose=True, name_dir="simple_pendulum_experiments"):
         
@@ -37,7 +41,10 @@ class PendulumMPCController:
         self.save_video = save_video
         self.verbose = verbose
         self.name_dir = name_dir
-        
+        self.control_authority = control_authority
+        self.n_states = n_states
+        self.n_control = n_control
+
         # Setup pendulum dynamics
         params = torch.tensor((gravity, mass, length))
         self.dynamics = pendulum.PendulumDx(params, simple=True)
@@ -111,8 +118,8 @@ class PendulumMPCController:
         
         # Create MPC controller
         mpc_controller = mpc.MPC(
-            n_state=3, n_ctrl=1, T=self.mpc_horizon,
-            u_lower=-2.0, u_upper=2.0, lqr_iter=self.lqr_iterations,
+            self.n_states, self.n_control, self.mpc_horizon,
+            u_lower= -self.control_authority, u_upper=self.control_authority, lqr_iter=self.lqr_iterations,
             verbose=0, exit_unconverged=False, detach_unconverged=False,
             grad_method=GradMethods.AUTO_DIFF, eps=self.convergence_eps
         )
@@ -167,7 +174,6 @@ class PendulumMPCController:
         
         return results
 
-
 def main():
     """Run pendulum swing-up experiment."""
     # Never forget to set the seed
@@ -184,7 +190,6 @@ def main():
     
     results = controller.run_experiment()
     print(f"Swing-up {'successful' if results['success'] else 'failed'}!")
-
 
 if __name__ == '__main__':
     main()
