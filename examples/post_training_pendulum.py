@@ -12,6 +12,19 @@ from mpc.mpc import QuadCost, GradMethods
 from mpc.env_dx import pendulum
 from simple_pendulum import PendulumMPCController
 
+# Enable LaTeX rendering (same as plot_training_results.py)
+plt.rcParams['text.usetex'] = True
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Computer Modern Roman']
+
+# Global font size defaults
+plt.rcParams['font.size'] = 14          # Default font size
+plt.rcParams['axes.titlesize'] = 16     # Title font size  
+plt.rcParams['axes.labelsize'] = 14     # Axis label font size
+plt.rcParams['xtick.labelsize'] = 14    # X-tick font size
+plt.rcParams['ytick.labelsize'] = 14    # Y-tick font size
+plt.rcParams['legend.fontsize'] = 14    # Legend font size
+
 class DualPendulumComparison(PendulumMPCController):
     """Compare two pendulum models with different dynamics parameters."""
     
@@ -149,12 +162,12 @@ class DualPendulumComparison(PendulumMPCController):
         ax.set_xlabel('X Position')
         ax.set_ylabel('Y Position')
         
-        # Title with current states
-        ax.set_title(f'Step {timestep} - Overlaid Pendulum Comparison\n'
-                    f'True: θ={angle1:.1f}°, ω={dth1.item():.2f} rad/s\n'
-                    f'Learned: θ={angle2:.1f}°, ω={dth2.item():.2f} rad/s\n'
-                    f'Δθ={abs(angle1-angle2):.1f}°', 
-                    fontsize=12, pad=15)
+        # Title with current states (using LaTeX-compatible symbols)
+        title_text = (f'Step {timestep} - Overlaid Pendulum Comparison\n'
+                      f'True: $\\theta$={angle1:.1f}$^\\circ$, $\\omega$={dth1.item():.2f} rad/s\n'
+                      f'Learned: $\\theta$={angle2:.1f}$^\\circ$, $\\omega$={dth2.item():.2f} rad/s\n'
+                      f'$\\Delta\\theta$={abs(angle1-angle2):.1f}$^\\circ$')
+        ax.set_title(title_text, fontsize=12, pad=15)
         
         # Add legend
         ax.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0))
@@ -164,8 +177,15 @@ class DualPendulumComparison(PendulumMPCController):
         fig.savefig(frame_path, bbox_inches='tight', dpi=100, facecolor='white')
         plt.close(fig)
     
-    def create_comparison_plots(self):
-        """Create detailed comparison plots."""
+    def create_comparison_plots(self, 
+                              font_size_labels=18, 
+                              font_size_title=20, 
+                              font_size_legend=16,
+                              font_size_ticks=16,
+                              figsize=(12, 10),
+                              save_format='pdf',
+                              dpi=300):
+        """Create detailed comparison plots with LaTeX styling."""
         # Convert stored data to arrays and detach gradients
         true_states = torch.cat(self.true_trajectory['states'], dim=0).detach()
         learned_states = torch.cat(self.learned_trajectory['states'], dim=0).detach()
@@ -185,49 +205,68 @@ class DualPendulumComparison(PendulumMPCController):
         learned_angles = np.arctan2(learned_sin.numpy(), learned_cos.numpy()) * 180 / np.pi
         learned_controls = learned_actions.squeeze().numpy()
         
-        # Create comparison plot (vertical layout)
-        fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+        # Create comparison plot (vertical layout) with LaTeX styling
+        fig, axes = plt.subplots(3, 1, figsize=figsize)
         
         # Angle comparison
         true_params_str = f"[{self.true_params[0]:.2f}, {self.true_params[1]:.2f}, {self.true_params[2]:.2f}]"
         learned_params_str = f"[{self.learned_params[0]:.2f}, {self.learned_params[1]:.2f}, {self.learned_params[2]:.2f}]"
         
-        axes[0].plot(time, true_angles, 'b-', linewidth=2, label=f'True {true_params_str}')
-        axes[0].plot(time, learned_angles, 'r--', linewidth=2, label=f'Learned {learned_params_str}')
-        axes[0].set_ylabel('Angle (degrees)')
-        axes[0].set_title('Pendulum Angle Comparison')
+        axes[0].plot(time, true_angles, 'b-', linewidth=2.5, alpha=0.9, label=f'True {true_params_str}')
+        axes[0].plot(time, learned_angles, 'r--', linewidth=2.5, alpha=0.9, label=f'Learned {learned_params_str}')
+        axes[0].set_ylabel(r'Angle (degrees)', fontsize=font_size_labels)
+        axes[0].set_title(r'Pendulum Angle Comparison', fontsize=font_size_title)
         axes[0].grid(True, alpha=0.3)
-        axes[0].legend()
-        axes[0].axhline(y=0, color='k', linestyle='-', alpha=0.3, label='Upright')
+        axes[0].legend(fontsize=font_size_legend)
+        axes[0].axhline(y=0, color='k', linestyle='-', alpha=0.3, linewidth=1)
+        axes[0].tick_params(axis='both', which='major', labelsize=font_size_ticks)
+        axes[0].set_xlim(0, time[-1])
         
         # Angular velocity comparison
-        axes[1].plot(time, true_vel.numpy(), 'b-', linewidth=2, label='True')
-        axes[1].plot(time, learned_vel.numpy(), 'r--', linewidth=2, label='Learned')
-        axes[1].set_ylabel('Angular Velocity (rad/s)')
-        axes[1].set_title('Angular Velocity Comparison')
+        axes[1].plot(time, true_vel.numpy(), 'b-', linewidth=2.5, alpha=0.9, label='True')
+        axes[1].plot(time, learned_vel.numpy(), 'r--', linewidth=2.5, alpha=0.9, label='Learned')
+        axes[1].set_ylabel(r'Angular Velocity (rad/s)', fontsize=font_size_labels)
+        axes[1].set_title(r'Angular Velocity Comparison', fontsize=font_size_title)
         axes[1].grid(True, alpha=0.3)
-        axes[1].legend()
+        axes[1].legend(fontsize=font_size_legend)
+        axes[1].tick_params(axis='both', which='major', labelsize=font_size_ticks)
+        axes[1].set_xlim(0, time[-1])
         
         # Control input comparison
-        axes[2].plot(time, true_controls, 'b-', linewidth=2, label='True')
-        axes[2].plot(time, learned_controls, 'r--', linewidth=2, label='Learned')
-        axes[2].set_xlabel('Time (s)')
-        axes[2].set_ylabel('Control Torque (N⋅m)')
-        axes[2].set_title('Control Input Comparison')
+        axes[2].plot(time, true_controls, 'b-', linewidth=2.5, alpha=0.9, label='True')
+        axes[2].plot(time, learned_controls, 'r--', linewidth=2.5, alpha=0.9, label='Learned')
+        axes[2].set_xlabel(r'Time (s)', fontsize=font_size_labels)
+        axes[2].set_ylabel(r'Control Torque (N$\cdot$m)', fontsize=font_size_labels)
+        axes[2].set_title(r'Control Input Comparison', fontsize=font_size_title)
         axes[2].grid(True, alpha=0.3)
-        axes[2].legend()
-        axes[2].axhline(y=self.control_authority, color='k', linestyle=':', alpha=0.5, label='Limits')
-        axes[2].axhline(y=-self.control_authority, color='k', linestyle=':', alpha=0.5)
+        axes[2].legend(fontsize=font_size_legend)
+        axes[2].axhline(y=self.control_authority, color='k', linestyle=':', alpha=0.5, linewidth=1.5, label='Limits')
+        axes[2].axhline(y=-self.control_authority, color='k', linestyle=':', alpha=0.5, linewidth=1.5)
+        axes[2].tick_params(axis='both', which='major', labelsize=font_size_ticks)
+        axes[2].set_xlim(0, time[-1])
         
-        plt.tight_layout()
-        plot_path = os.path.join(self.experiment_dir, 'comparison_plots.png')
-        fig.savefig(plot_path, dpi=150, bbox_inches='tight')
-        plt.close(fig)
-        
-        # Calculate RMS differences for quantitative comparison
+        # Add statistics text box
         angle_rms = np.sqrt(np.mean((true_angles - learned_angles)**2))
         velocity_rms = np.sqrt(np.mean((true_vel.numpy() - learned_vel.numpy())**2))
         control_rms = np.sqrt(np.mean((true_controls - learned_controls)**2))
+        
+        stats_text = (f'RMS Differences:\\\\'
+                     f'Velocity: {velocity_rms:.3f} rad/s\\\\'
+                     f'Control: {control_rms:.3f} N$\\cdot$m')
+        
+        axes[0].text(0.98, 0.95, stats_text,
+                    transform=axes[0].transAxes, fontsize=font_size_legend-2,
+                    verticalalignment='top', horizontalalignment='right',
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        
+        plt.tight_layout()
+        
+        # Save with high quality
+        plot_filename = f'comparison_plots.{save_format}'
+        plot_path = os.path.join(self.experiment_dir, plot_filename)
+        fig.savefig(plot_path, bbox_inches='tight', dpi=dpi, 
+                   facecolor='white', edgecolor='none')
+        plt.close(fig)
         
         return plot_path, {
             'angle_rms': angle_rms,
@@ -253,7 +292,7 @@ class DualPendulumComparison(PendulumMPCController):
         true_total_cost = sum(self.true_trajectory['costs'])
         learned_total_cost = sum(self.learned_trajectory['costs'])
         
-        # Create comparison plots
+        # Create comparison plots with LaTeX styling
         plot_path, rms_metrics = self.create_comparison_plots()
         
         # Create video
@@ -283,9 +322,9 @@ class DualPendulumComparison(PendulumMPCController):
         cmd = f'ffmpeg -y -r 16 -i {self.experiment_dir}/%03d.png -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" -vcodec libx264 -pix_fmt yuv420p {video_path}'
         
         if os.system(cmd) == 0:
-            # Clean up frames
+            # Clean up frames (but keep the comparison plots)
             for f in os.listdir(self.experiment_dir):
-                if f.endswith('.png') and f != 'comparison_plots.png':
+                if f.endswith('.png') and not f.startswith('comparison_plots'):
                     os.remove(os.path.join(self.experiment_dir, f))
             return video_path
         return None
@@ -318,11 +357,6 @@ def main():
     print(f"  True:    {results['true_final_angle']:6.1f}° ({'Success' if results['true_success'] else 'Failed'})")
     print(f"  Learned: {results['learned_final_angle']:6.1f}° ({'Success' if results['learned_success'] else 'Failed'})")
     print(f"  Difference: {results['angle_difference']:6.1f}°")
-    print(f"")
-    print(f"Total Costs:")
-    print(f"  True:    {results['true_total_cost']:8.2f}")
-    print(f"  Learned: {results['learned_total_cost']:8.2f}")
-    print(f"  Difference: {results['cost_difference']:8.2f}")
     print(f"")
     print(f"RMS Differences (Quantitative Analysis):")
     print(f"  Angle RMS:     {results['rms_metrics']['angle_rms']:8.3f}°")
