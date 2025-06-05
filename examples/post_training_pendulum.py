@@ -1,4 +1,32 @@
 #!/usr/bin/env python3
+"""
+Post-Training Validation: Side-by-Side Pendulum Comparison
+
+Validates learned pendulum parameters by running simultaneous MPC simulations
+with true vs. learned dynamics. Generates overlaid visualizations and quantitative
+performance metrics to assess parameter learning quality. Make sure to change the learned parameters that
+you want to test in the main function of this script.
+
+Key Features:
+- Dual pendulum simulation with identical initial conditions
+- Real-time overlaid visualization showing both pendulums from same pivot
+- Quantitative RMS error analysis (angle, velocity, control differences)
+
+Validation Metrics:
+- Final angle accuracy and swing-up success
+- RMS trajectory differences throughout simulation
+- Control effort comparison and constraint adherence
+- Side-by-side video with angle/velocity overlays
+
+Usage:
+    python post_training_pendulum.py
+    # Or: comparison = DualPendulumComparison(true_params, learned_params)
+
+Output Structure:
+    pendulum_experiments/pendulum_comparison/{timestamp}/
+    ├── comparison_plots.pdf          # Quantitative analysis plots
+    ├── pendulum_comparison.mp4       # Side-by-side video
+"""
 
 import torch
 import numpy as np

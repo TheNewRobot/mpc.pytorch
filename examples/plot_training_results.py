@@ -1,3 +1,29 @@
+"""
+Training Results Visualization for Differentiable MPC Parameter Learning
+
+Generates publication-quality plots from training logs saved by learning_pendulum.py.
+Creates loss evolution curves and parameter convergence plots with LaTeX formatting.
+Make sure to change the name of the experiment! (it is down below)
+
+Key Features:
+- Automatic plot generation from JSON/pickle training logs
+- Multiple output formats (PDF, PNG, SVG, EPS)
+- Preset configurations for papers, presentations, and custom styling
+- Saves plots automatically in same directory as training logs
+
+Plot Types:
+1. Training loss evolution with convergence statistics
+2. Parameter evolution (g, m, l) vs true values with error metrics
+3. Combined summary plots
+
+Usage:
+    python plot_training_results.py
+    # Or import functions: plot_training_logs_simple(log_path)
+
+Input: training_logs.json or training_logs.pkl from experiment directory
+Output: PDF/PNG plots saved alongside training logs
+"""
+
 import matplotlib.pyplot as plt
 import json
 import pickle
@@ -285,7 +311,8 @@ if __name__ == '__main__':
     # Example usage with automatic saving
     
     # Method 1: Direct path to training logs (saves in same directory)
-    log_path = 'pendulum_experiments/learn_params/20250603_095123/training_logs.json'
+    exp = '20250603_095123'
+    log_path = f'pendulum_experiments/learn_params/{exp}/training_logs.json'
     if os.path.exists(log_path):
         print("Generating plots with automatic saving...")
         fig1, fig2 = plot_training_logs_simple(log_path, save_plots=True, save_format='pdf')
@@ -293,19 +320,16 @@ if __name__ == '__main__':
     else:
         print(f"Log file not found: {log_path}")
     
-    # Method 2: From experiment directory (automatically finds logs)
     # experiment_dir = 'pendulum_experiments/learn_params/20250603_095123'
     # if os.path.exists(experiment_dir):
     #     print("\nGenerating plots from experiment directory...")
     #     fig1, fig2 = auto_plot_from_experiment_dir(experiment_dir, save_plots=True, save_format='pdf')
     #     plt.show()
     
-    # Method 3: Multiple formats
     # if os.path.exists(log_path):
     #     print("\nGenerating plots in multiple formats...")
     #     results = plot_and_save_multiple_formats(log_path, formats=['pdf', 'png', 'svg'])
     
-    # Method 4: Different presets with saving
     # if os.path.exists(log_path):
     #     print("\nGenerating paper-quality plots...")
     #     fig1, fig2 = plot_training_logs_paper(log_path, save_plots=True, save_format='pdf')
@@ -318,13 +342,3 @@ if __name__ == '__main__':
     #     plt.close(fig2)
     
     print("\nPlots generated successfully!")
-    print("\nNew features:")
-    print("- Plots are automatically saved in the same directory as training logs")
-    print("- Use save_plots=True/False to control saving")
-    print("- Use save_format='pdf'/'png'/'svg'/'eps' to choose format")
-    print("- Use plot_and_save_multiple_formats() to save in multiple formats")
-    print("- Use auto_plot_from_experiment_dir() to automatically find logs")
-    print("\nSaved files:")
-    print("- training_loss_evolution.{format}")
-    print("- parameter_evolution.{format}")
-    print("- training_summary.{format} (combined overview)")

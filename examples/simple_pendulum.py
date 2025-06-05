@@ -1,4 +1,32 @@
 #!/usr/bin/env python3
+"""
+Simple Pendulum MPC Controller for Swing-Up Task
+
+Compact implementation of Model Predictive Control for pendulum swing-up from
+hanging-down to upright position. Serves as baseline controller and base class
+for more complex pendulum experiments (learning, comparison, validation).
+
+Key Features:
+- Configurable MPC parameters (horizon, iterations, convergence criteria)
+- Flexible initial conditions (angle, velocity) and physics parameters (g, m, l)
+- LaTeX-formatted visualization with angle/velocity overlays
+- Automatic video generation with frame cleanup
+- Success evaluation (within 10° of upright)
+
+Control Formulation:
+- State: [cos(θ), sin(θ), θ̇] (3D)
+- Control: torque ∈ [-2, 2] N⋅m
+- Cost: quadratic penalty on deviation from upright + control effort
+- Dynamics: exact pendulum physics with configurable parameters
+
+Usage:
+    python simple_pendulum.py
+
+Output Structure:
+    pendulum_experiments/simple_pendulum_experiments/{timestamp}/
+    ├── pendulum_swingup.mp4    # Swing-up animation
+
+"""
 
 import torch
 import numpy as np

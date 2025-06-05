@@ -25,7 +25,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 from mpc import mpc
-from monitor import Monitor
+from examples.monitor import Monitor
 from simple_training_plots import SimpleTrainingPlotter
 
 parser = argparse.ArgumentParser(description='Fixed MPC Pendulum Training')
