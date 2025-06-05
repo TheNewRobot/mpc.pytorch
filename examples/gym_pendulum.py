@@ -1,26 +1,19 @@
 """
-MPC Pendulum Controller with Known Dynamics and Monitoring
-=========================================================
+MPC Pendulum Controller with Known Dynamics
+===========================================
 
 This script implements Model Predictive Control (MPC) for the pendulum swing-up
-problem using an explicitly defined dynamics model based on physics equations.
-Includes a monitoring system for plotting state variables and control inputs.
+problem using an explicitly defined dynamics model based on physics equations based on OpenAI Gym.
+Includes a monitoring system for plotting state variables and control inputs. This one was not used for 
+the learning process because it doesn't have the dynamics structure that mpc.torch is expecting.
 
 Purpose:
 - Demonstrate MPC control of a pendulum using known system dynamics
 - Swing up a pendulum from downward position to upright balanced position
 - Optimize control actions over a prediction horizon to minimize costs
-- Monitor and plot key variables during simulation
-
-Features:
-- Physics-based pendulum dynamics model
-- Configurable rendering via command-line argument
-- Real-time plotting of state variables, control inputs, and rewards
-- Quadratic cost function penalizing deviation from goal and control effort
-- Model predictive control with auto-differentiation gradient method
 
 Usage:
-    python pendulum_mpc_with_monitor.py [--render] [--plot]
+    python gym_pednulum.py [--render] [--plot]
 
 Arguments:
     --render    Enable visual rendering of the pendulum

@@ -1,5 +1,43 @@
 #!/usr/bin/env python3
 
+"""
+Differentiable MPC Parameter Learning for Pendulum Swing-Up
+
+This script implements parameter learning for a pendulum system using differentiable
+Model Predictive Control (MPC). An expert MPC controller with known true dynamics
+generates demonstration trajectories, which are then used to train a learnable
+dynamics model through imitation learning.
+
+Key Components:
+- LearnablePendulumDx: Wrapper for pendulum dynamics with learnable parameters (g, m, l)
+- ParameterLearner: Main class that orchestrates the learning process
+- Expert trajectory generation using true pendulum dynamics
+- Imitation learning via MSE loss between expert and learned MPC actions
+- Gradient flow through differentiable MPC solver (backprop=True)
+
+The learning objective minimizes the difference between actions produced by:
+1. Expert MPC (using true dynamics)
+2. Learnable MPC (using parameterized dynamics)
+
+Usage:
+    python learning_pendulum.py
+
+Output Structure:
+    pendulum_experiments/learn_params/{timestamp}/
+    ├── training_logs.json          # Human-readable training results
+    ├── training_logs.pkl           # Pickled results for analysis
+    ├── learned_params_swingup.mp4  # Video of learned model performance (buggy what shows a good reference)
+    └── {timestep:03d}.png          # Individual frame files (cleaned after video)
+
+Saved Data:
+- Parameter evolution history (g, m, l over episodes)
+- Training loss curves and convergence metrics
+- Final learned vs. true parameter comparison
+- Success metrics and final swing-up angle
+
+Dependencies: torch, mpc.pytorch, matplotlib, numpy, tqdm
+"""
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -38,10 +76,11 @@ class LearnablePendulumDx(nn.Module):
 
 class ParameterLearner:
     """Learn pendulum model parameters using differentiable MPC."""
-    
+
     def __init__(self,
                  true_params=torch.tensor([10.0, 1.0, 1.0]),  # g, m, l
                  init_guess=None,
+                 # Algorithm hyperparameters
                  mpc_horizon=10,
                  lqr_iterations=10,
                  n_episodes=50,
@@ -50,6 +89,7 @@ class ParameterLearner:
                  # Test
                  initial_angle = np.pi/5,
                  initial_vel = 0.0,
+                 # 
                  verbose=True,
                  save_video=True,
                  seed=42):
@@ -180,7 +220,8 @@ class ParameterLearner:
                 continue
         
         # Add regularization to keep parameters reasonable
-        param_reg = 0.01 * torch.sum((self.learnable_dynamics.params - self.true_params)**2)
+        # param_reg = 0.01 * torch.sum((self.learnable_dynamics.params - self.true_params)**2)
+        param_reg = 0.01 * torch.sum((self.learnable_dynamics.params)**2)
         total_loss += param_reg
         
         return total_loss
