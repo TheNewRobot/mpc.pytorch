@@ -62,7 +62,7 @@ python learning_pendulum.py
 # 3. Generate training plots
 python plot_training_results.py
 
-# 4. Validate learned parameters
+# 4. Validate learned parameters and visualize an experiment
 python post_training_pendulum.py
 
 ```
