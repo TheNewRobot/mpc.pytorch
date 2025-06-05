@@ -1,4 +1,4 @@
-# mpc.pytorch • [![Build Status][travis-image]][travis] [![PyPi][pypi-image]][pypi] [![License][license-image]][license]
+# mpc.pytorch - UCLA 271D S25 • [![Build Status][travis-image]][travis] [![PyPi][pypi-image]][pypi] [![License][license-image]][license]
 
 [travis-image]: https://travis-ci.org/locuslab/mpc.pytorch.png?branch=master
 [travis]: http://travis-ci.org/locuslab/mpc.pytorch
