@@ -46,3 +46,29 @@ sudo apt install python3-tk
 # For LaTeX support in matplotlib
 sudo apt install texlive texlive-latex-extra dvipng cm-super
 ```
+## Pendulum Parameter Learning with Differentiable MPC
+Complete workflow for learning pendulum dynamics using differentiable MPC through expert demonstrations.
+
+### Quick Start
+Run experiments in order:
+
+``` bash
+# 1. Baseline pendulum control
+python simple_pendulum.py
+
+# 2. Learn parameters from expert demonstrations (~30 min)
+python learning_pendulum.py
+
+# 3. Generate training plots
+python plot_training_results.py
+
+# 4. Validate learned parameters
+python post_training_pendulum.py
+
+```
+### Expected Results
+- Parameter Recovery: True `[g=10.0, m=1.0, l=1.0]` → Learned `[~10.1, ~0.87, ~1.09]`
+- Performance: Both models successfully perform swing-up task
+- Outputs: Training logs, parameter evolution plots, comparison videos
+
+All results saved in `pendulum_experiments/` with timestamped directories.
